@@ -153,4 +153,33 @@ def initialize_database(dataset_root: Path) -> tuple[duckdb.DuckDBPyConnection, 
             print(f"✗ Failed to create {collection}: {e}")
     
     conn.commit()
+    
+    # Create graph projection tables
+    create_graph_tables(conn)
+    
     return conn, tables_created
+
+
+def create_graph_tables(conn: duckdb.DuckDBPyConnection) -> None:
+    """Create graph projection tables."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS graph_nodes (
+            node_id VARCHAR PRIMARY KEY,
+            node_type VARCHAR NOT NULL,
+            label VARCHAR NOT NULL,
+            metadata_json JSON
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS graph_edges (
+            edge_id VARCHAR PRIMARY KEY,
+            source_id VARCHAR NOT NULL,
+            target_id VARCHAR NOT NULL,
+            edge_type VARCHAR NOT NULL,
+            metadata_json JSON
+        )
+    """)
+
+    conn.commit()
+    print("✓ Created graph projection tables: graph_nodes, graph_edges")
