@@ -10,37 +10,30 @@ sys.path.insert(0, str(backend_path))
 
 from app.db.init_db import initialize_database
 from app.services.ingest_service import IngestService
-from app.config import Config
 
 
 def main():
     """Main ingestion function."""
-    print("=" * 70)
+    print("=" * 80)
     print("SAP O2C DATASET INGESTION")
-    print("=" * 70)
-    
-    # Verify raw data exists
-    raw_data_dir = Config.RAW_DATA_DIR
-    if not raw_data_dir.exists():
-        print(f"\n❌ ERROR: Raw data directory not found!")
-        print(f"   Expected: {raw_data_dir}")
-        print(f"   Please ensure data/raw/sap-o2c-data/sap-o2c-data/ contains JSONL files.")
-        sys.exit(1)
-    
-    print(f"\n✓ Raw data directory found: {raw_data_dir}")
-    print(f"✓ Database will be created at: {Config.DATABASE_PATH}")
+    print("=" * 80)
     
     try:
+        # Find dataset root
+        temp_service = IngestService(None)  # Temporary instance just for validation
+        dataset_root = temp_service.validate_dataset_exists()
+        
         # Initialize database and create tables
         print("\n📊 Initializing database schema...")
-        conn, tables_created = initialize_database(raw_data_dir)
+        conn, tables_created = initialize_database(dataset_root)
         print(f"✓ Created {len(tables_created)} tables")
         
-        # Ingest data
+        # Ingest data from each collection folder
         print("\n📥 Starting data ingestion...")
         ingest_service = IngestService(conn)
         
-        collections = [
+        # Required core collections (fail if missing)
+        required_collections = [
             "sales_order_headers",
             "sales_order_items",
             "outbound_delivery_headers",
@@ -52,16 +45,35 @@ def main():
             "plants",
         ]
         
-        for collection in collections:
-            jsonl_path = raw_data_dir / f"{collection}.jsonl"
-            ingest_service.ingest_collection(collection, jsonl_path)
+        # Optional collections (warn if missing)
+        optional_collections = [
+            "journal_entry_items_accounts_receivable",
+            "payments_accounts_receivable",
+            "business_partner_addresses",
+        ]
+        
+        missing_required = []
+        for collection in required_collections + optional_collections:
+            collection_dir = dataset_root / collection
+            if collection_dir.exists():
+                ingest_service.ingest_collection(collection, collection_dir)
+            else:
+                if collection in required_collections:
+                    missing_required.append(collection)
+                else:
+                    print(f"⚠️  Optional collection missing: {collection}")
+        
+        if missing_required:
+            print(f"\n❌ ERROR: Missing required collections: {', '.join(missing_required)}")
+            conn.close()
+            sys.exit(1)
         
         # Print summary
         ingest_service.print_summary()
         
         conn.close()
         print("\n✅ Ingestion complete!")
-        print("\n" + "=" * 70)
+        print("\n" + "=" * 80)
         
     except Exception as e:
         print(f"\n❌ ERROR: {e}")

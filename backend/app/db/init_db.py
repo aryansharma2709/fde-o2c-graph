@@ -110,13 +110,12 @@ def find_dataset_root() -> Path:
     raise FileNotFoundError(f"Dataset root not found. Checked: {nested_path}, {direct_path}")
 
 
-def initialize_database() -> tuple[duckdb.DuckDBPyConnection, list[str], Path]:
+def initialize_database(dataset_root: Path) -> tuple[duckdb.DuckDBPyConnection, list[str]]:
     """Initialize database by creating tables from collection folders."""
-    dataset_root = find_dataset_root()
     db_path = Path(__file__).parent.parent.parent / "data" / "processed" / "o2c_graph.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     
-    print(f"✓ Dataset root detected: {dataset_root}")
+    print(f"✓ Dataset root: {dataset_root}")
     
     conn = duckdb.connect(str(db_path))
     
@@ -154,4 +153,4 @@ def initialize_database() -> tuple[duckdb.DuckDBPyConnection, list[str], Path]:
             print(f"✗ Failed to create {collection}: {e}")
     
     conn.commit()
-    return conn, tables_created, dataset_root
+    return conn, tables_created

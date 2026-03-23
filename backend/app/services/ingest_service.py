@@ -13,6 +13,29 @@ class IngestService:
         self.conn = conn
         self.stats = {}
     
+    @staticmethod
+    def find_dataset_root() -> Path:
+        """Find the correct dataset root directory."""
+        base_path = Path(__file__).parent.parent.parent / "data" / "raw"
+        
+        # Check for nested structure first
+        nested_path = base_path / "sap-o2c-data" / "sap-o2c-data"
+        if nested_path.exists() and nested_path.is_dir():
+            return nested_path
+        
+        # Check for direct structure
+        direct_path = base_path / "sap-o2c-data"
+        if direct_path.exists() and direct_path.is_dir():
+            return direct_path
+        
+        raise FileNotFoundError(f"Dataset root not found. Checked: {nested_path}, {direct_path}")
+    
+    def validate_dataset_exists(self) -> Path:
+        """Validate that the dataset directory exists and return the root."""
+        dataset_root = self.find_dataset_root()
+        print(f"✓ Dataset root detected: {dataset_root}")
+        return dataset_root
+    
     def normalize_record(self, record: Dict[str, Any], table_name: str) -> Dict[str, Any]:
         """Normalize record data (sanitize column names, compute helper fields)."""
         normalized = {}
