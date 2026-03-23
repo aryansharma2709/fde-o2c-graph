@@ -13,14 +13,13 @@ Intent Classification (Graph vs Analytical)
     ↓
 SQL Generation & Validation
     ↓
-DuckDB Query Execution
+DuckDB Query Execution (21K rows across 19 JSONL-sourced tables)
     ↓
 LLM Response Synthesis
     ↓
 Return grounded response with evidence
     ↓
 Render in Frontend (chat + graph highlight)
-```
 
 ## Component Details
 
