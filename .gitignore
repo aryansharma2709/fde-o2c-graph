@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.env
+.env.*
+*.db
+*.duckdb
+.coverage
+.DS_Store
+submission/ai-logs/

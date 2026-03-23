@@ -30,15 +30,22 @@ python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# Load dataset (if not already present)
-unzip data/raw/sap-order-to-cash-dataset.zip -d data/raw/
-python scripts/load_dataset.py
+# Ingest dataset and build graph
+python ../scripts/ingest_dataset.py
 
 # Start dev server
 uvicorn app.main:app --reload --port 8000
 
 # View docs at http://localhost:8000/docs
 ```
+
+**API Endpoints**:
+- `GET /api/health` - Health check
+- `POST /api/ingest` - Load dataset and build graph
+- `GET /api/schema` - Get table information
+- `GET /api/graph/overview` - Graph statistics and samples
+- `GET /api/node/{node_id}` - Get node with neighbors
+- `GET /api/graph/subgraph?node_id=...&depth=1` - Get neighborhood subgraph
 
 ### Frontend (React + Vite)
 

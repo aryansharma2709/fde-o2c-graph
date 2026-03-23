@@ -27,44 +27,246 @@ GET /api/health
 ```json
 {
   "status": "healthy",
-  "timestamp": "2026-03-24T10:30:00Z",
-  "version": "0.1.0"
+  "version": "1.0.0"
 }
 ```
 
 ---
 
-### 2. Get Graph Nodes
+### 2. Ingest Dataset
 
-Fetch nodes with optional filtering.
+Load the SAP O2C dataset and build graph projections.
 
 ```http
-GET /api/graph/nodes?node_type=order&status=pending&limit=100&offset=0
+POST /api/ingest
+```
+
+**Response (200 OK)**
+```json
+{
+  "relational_tables": {
+    "sales_order_headers": 100,
+    "sales_order_items": 167,
+    ...
+  },
+  "graph_nodes": 1234,
+  "graph_edges": 5678,
+  "message": "Dataset ingested successfully"
+}
+```
+
+---
+
+### 3. Get Schema
+
+Get database schema information.
+
+```http
+GET /api/schema
+```
+
+**Response (200 OK)**
+```json
+{
+  "relational_tables": [
+    "sales_order_headers",
+    "sales_order_items",
+    ...
+  ],
+  "graph_nodes_count": 1234,
+  "graph_edges_count": 5678
+}
+```
+
+---
+
+### 4. Get Graph Overview
+
+Get graph statistics and samples.
+
+```http
+GET /api/graph/overview
+```
+
+**Response (200 OK)**
+```json
+{
+  "node_counts": {
+    "Customer": 8,
+    "SalesOrder": 100,
+    ...
+  },
+  "edge_counts": {
+    "CUSTOMER_PLACED_ORDER": 100,
+    ...
+  },
+  "sample_nodes": [
+    {
+      "node_id": "Customer:310000108",
+      "node_type": "Customer",
+      "label": "Customer ABC Corp"
+    }
+  ],
+  "sample_edges": [
+    {
+      "edge_id": "CUSTOMER_PLACED_ORDER:740506",
+      "edge_type": "CUSTOMER_PLACED_ORDER",
+      "source_id": "Customer:310000108",
+      "target_id": "SalesOrder:740506"
+    }
+  ]
+}
+```
+
+---
+
+### 5. Get Node Details
+
+Get a specific node with its immediate neighbors.
+
+```http
+GET /api/node/{node_id}
+```
+
+**Path Parameters**
+| Param | Type | Description |
+|-------|------|-------------|
+| `node_id` | string | Node ID (e.g., "SalesOrder:740506") |
+
+**Response (200 OK)**
+```json
+{
+  "node": {
+    "node_id": "SalesOrder:740506",
+    "node_type": "SalesOrder",
+    "label": "740506",
+    "metadata": {
+      "totalNetAmount": 17108.25,
+      "creationDate": "2025-03-31T00:00:00.000Z"
+    }
+  },
+  "incoming_edges": [...],
+  "outgoing_edges": [...],
+  "neighbor_nodes": [...]
+}
+```
+
+**Response (404 Not Found)**
+```json
+{
+  "detail": "Node SalesOrder:740506 not found"
+}
+```
+
+---
+
+### 6. Get Subgraph
+
+Get a neighborhood subgraph around a node.
+
+```http
+GET /api/graph/subgraph?node_id=SalesOrder:740506&depth=1
 ```
 
 **Query Parameters**
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `node_type` | string | (all) | Filter by node type: `order`, `order_item`, `fulfillment`, `invoice`, `payment`, `supplier`, `customer`, `material`, `plant` |
-| `status` | string | (all) | Filter orders/invoices by status (e.g., `pending`, `completed`) |
-| `supplier_id` | string | (all) | Filter by supplier (applies to orders) |
-| `date_from` | ISO-8601 | (none) | Filter by creation date (inclusive) |
-| `date_to` | ISO-8601 | (none) | Filter by creation date (inclusive) |
-| `limit` | int | 500 | Result limit (max 1000) |
-| `offset` | int | 0 | Result offset for pagination |
+| `node_id` | string | required | Center node ID |
+| `depth` | int | 1 | Traversal depth (1-2) |
 
 **Response (200 OK)**
 ```json
 {
-  "nodes": [
-    {
-      "id": "order:ORD-2026-001",
-      "type": "order",
-      "label": "ORD-2026-001",
-      "attributes": {
-        "created_date": "2026-01-15",
-        "status": "completed",
-        "total_amount": 50000.00,
+  "nodes": [...],
+  "edges": [...],
+  "center_node_id": "SalesOrder:740506",
+  "depth": 1
+}
+```
+
+---
+
+## Response Codes
+
+| Code | Meaning |
+|------|---------|
+| 200 | Success |
+| 400 | Bad request (invalid parameters) |
+| 404 | Resource not found |
+| 422 | Unprocessable entity (validation error) |
+| 429 | Rate limited |
+| 500 | Server error |
+| 503 | Service unavailable (database error) |
+
+---
+
+## Error Response Format
+
+All errors follow this format:
+
+```json
+{
+  "error": "error_code",
+  "detail": "Human-readable explanation",
+  "request_id": "req-xyz-123"
+}
+```
+
+---
+
+## CORS Policy
+
+```
+Allowed Origins: https://fde-o2c-graph.vercel.app, http://localhost:3000
+Allowed Methods: GET, POST, OPTIONS
+Allowed Headers: Content-Type, Authorization
+Credentials: true (if using cookies)
+```
+
+---
+
+## API Versioning
+
+Current version: `v1` (implicit, may be added to paths in future)
+
+Future breaking changes will use `/api/v2/*` paths.
+
+---
+
+## Testing
+
+**cURL Examples**
+
+```bash
+# Health check
+curl "http://localhost:8000/api/health"
+
+# Ingest dataset
+curl -X POST "http://localhost:8000/api/ingest"
+
+# Get schema
+curl "http://localhost:8000/api/schema"
+
+# Get graph overview
+curl "http://localhost:8000/api/graph/overview"
+
+# Get node details
+curl "http://localhost:8000/api/node/SalesOrder:740506"
+
+# Get subgraph
+curl "http://localhost:8000/api/graph/subgraph?node_id=SalesOrder:740506&depth=1"
+```
+
+---
+
+## Implementation Notes
+
+- All `node_id` fields are globally unique within their type (e.g., `SalesOrder:740506`)
+- Node types use PascalCase (e.g., `SalesOrder`, `Customer`)
+- Edge types use UPPER_SNAKE_CASE (e.g., `CUSTOMER_PLACED_ORDER`)
+- Timestamps are ISO-8601 format, UTC timezone
+- Monetary amounts are stored as DECIMAL for precision
+- Null responses use `null` (not empty strings or 0)
         "supplier_id": "SUPP-123",
         "customer_id": "CUST-456"
       },
@@ -479,8 +681,9 @@ curl -X POST "http://localhost:8000/api/chat" \
 
 ## Implementation Notes
 
-- All `id` fields are globally unique within their type (e.g., `order:ORD-2026-001`)
-- Node `position` (x, y) is calculated client-side by React Flow layout algorithm
+- All `node_id` fields are globally unique within their type (e.g., `SalesOrder:740506`)
+- Node types use PascalCase (e.g., `SalesOrder`, `Customer`)
+- Edge types use UPPER_SNAKE_CASE (e.g., `CUSTOMER_PLACED_ORDER`)
 - Timestamps are ISO-8601 format, UTC timezone
-- Monetary amounts are stored as DECIMAL(15,2) for precision
+- Monetary amounts are stored as DECIMAL for precision
 - Null responses use `null` (not empty strings or 0)

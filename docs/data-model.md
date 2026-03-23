@@ -345,124 +345,196 @@ Why uncertain: `referenceDocument` is often NULL (123 rows, but not always popul
 
 ---
 
+## Join Coverage Summary
+
+**Validation Method**: Full dataset coverage via `scripts/validate_join_coverage.py`  
+**Date**: 2026-03-24  
+**Normalization**: IDs normalized to zero-padded strings for comparison  
+
+| Join Path | Left Distinct Keys | Right Distinct Keys | Matched Keys | Key Coverage % | Classification | Notes |
+|-----------|-------------------|---------------------|--------------|----------------|----------------|-------|
+| sales_order_headers.salesOrder → sales_order_items.salesOrder | 100 | 100 | 100 | 100.0% | confirmed_with_normalization | Perfect coverage with normalization |
+| sales_order_items.(salesOrder, salesOrderItem) → outbound_delivery_items.(referenceSdDocument, referenceSdDocumentItem) | 167 | 137 | 137 | 82.04% | partial | 82% coverage - some items not delivered |
+| outbound_delivery_items.(deliveryDocument, deliveryDocumentItem) → billing_document_items.(referenceSdDocument, referenceSdDocumentItem) | 137 | 124 | 124 | 90.51% | partial | 91% coverage - some deliveries not invoiced |
+| billing_document_headers.accountingDocument → journal_entry_items_accounts_receivable.accountingDocument | 163 | 123 | 123 | 75.46% | uncertain | 75% coverage - GL entries may be batched |
+| journal_entry_items_accounts_receivable.accountingDocument → payments_accounts_receivable.clearingAccountingDocument | 123 | 56 | 56 | 45.53% | not_recommended | 46% coverage - many invoices unpaid |
+| sales_order_headers.soldToParty → business_partners.businessPartner | 8 | 8 | 8 | 100.0% | confirmed_with_normalization | Perfect coverage with normalization; 100 rows reference 8 unique customers |
+| sales_order_items.material → products.product | 69 | 69 | 69 | 100.0% | confirmed_with_normalization | Perfect coverage with normalization; 167 rows reference 69 unique products |
+| outbound_delivery_items.plant → plants.plant | 5 | 5 | 5 | 100.0% | confirmed_with_normalization | Perfect coverage with normalization; 137 rows reference 5 unique plants |
+| business_partners.businessPartner → business_partner_addresses.businessPartner | 8 | 8 | 8 | 100.0% | confirmed_with_normalization | Perfect coverage with normalization |
+| plants.addressId → business_partner_addresses.addressId | 0 | 8 | 0 | 0.0% | not_recommended | No meaningful linkage - plants.addressId not populated |
+
+**Classification Legend**:
+- **confirmed**: >95% coverage without normalization
+- **confirmed_with_normalization**: >95% coverage with ID normalization
+- **partial**: 80-95% coverage
+- **uncertain**: 50-80% coverage
+- **not_recommended**: <50% coverage
+
+**Key Coverage Notes**: Coverage is measured on distinct key values, not row counts. For master data joins (e.g., soldToParty → businessPartner), 100% key coverage means all referenced entities exist, but multiple rows may reference the same entity.
+
+---
+
 ## Verified Join Paths
 
-### ✓ Confirmed Path 1: Sales Order → Items
+### ✓ Confirmed Path 1: Sales Order → Items (confirmed_with_normalization)
 
 ```
 sales_order_headers.salesOrder 
   → sales_order_items.salesOrder (1:N)
 ```
+- **Coverage**: 100% (100/100 matched with normalization)
 - **Example**: `salesOrder="740506"` has 1+ items with `salesOrderItem="10"`, `"20"`, etc.
-- **Verified**: Yes, sample data shows multiple items per order.
+- **Verified**: Full dataset validation confirms perfect coverage.
 
 ---
 
-### ✓ Confirmed Path 2: Sales Order Items → Outbound Delivery Items
+### ✓ Confirmed Path 2: Sales Order Items → Outbound Delivery Items (partial)
 
 ```
 sales_order_items.(salesOrder, salesOrderItem)
   → outbound_delivery_items.(referenceSdDocument, referenceSdDocumentItem) (1:N)
 ```
+- **Coverage**: 82.04% (137/167 matched)
 - **Column Evidence**: `outbound_delivery_items.referenceSdDocument` = sales order ID
-- **Verified**: Yes, sample row shows `referenceSdDocument="740556"`, `referenceSdDocumentItem="000010"`
+- **Verified**: Partial coverage - some order items not yet delivered or cancelled.
 - **Cardinality**: 1 sales order item can generate multiple delivery items (partial shipments, splits)
 
 ---
 
-### ✓ Confirmed Path 3: Outbound Delivery Items → Billing Document Items
+### ✓ Confirmed Path 3: Outbound Delivery Items → Billing Document Items (partial)
 
 ```
 outbound_delivery_items.(deliveryDocument, deliveryDocumentItem)
   → billing_document_items.(referenceSdDocument, referenceSdDocumentItem) (1:N)
 ```
+- **Coverage**: 90.51% (124/137 matched)
 - **Column Evidence**: `billing_document_items.referenceSdDocument` = delivery document ID
-- **Verified**: Yes, sample shows `referenceSdDocument="80738109"`, `referenceSdDocumentItem="10"`
+- **Verified**: Partial coverage - some deliveries not yet invoiced.
 - **Cardinality**: 1 delivery can be billed in multiple invoices (batch invoicing) or 1 delivery per invoice
 
 ---
 
-### ✓ Confirmed Path 4: Billing Document Headers → Items
+### ✓ Confirmed Path 4: Billing Document Headers → Items (assumed)
 
 ```
 billing_document_headers.billingDocument
   → billing_document_items.billingDocument (1:N)
 ```
-- **Verified**: Yes, standard SAP pattern.
+- **Coverage**: Not validated (standard SAP pattern, assumed 100%)
+- **Verified**: Standard header-item relationship in SAP.
 
 ---
 
-### ✓ Confirmed Path 5: Billing Document Headers → GL Entry (Accounts Receivable)
+### ⚠ Uncertain Path 5: Billing Document Headers → GL Entry (uncertain)
 
 ```
 billing_document_headers.accountingDocument
   → journal_entry_items_accounts_receivable.accountingDocument (1:N)
 ```
+- **Coverage**: 75.46% (123/163 matched)
 - **Evidence**: `billing_document_headers.accountingDocument="9400000249"` appears in journal entries
-- **Verified**: Yes, invoice creates GL posting for AR
+- **Verified**: Uncertain coverage - GL entries may be posted in batches or delayed.
 - **Cardinality**: 1 invoice = 1+ GL line items (debit AR, credit Revenue, credit Tax, etc.)
 
 ---
 
-### ✓ Confirmed Path 6: GL Entry → Payment Clearing
+### ✗ Not Recommended Path 6: GL Entry → Payment Clearing (not_recommended)
 
 ```
 journal_entry_items_accounts_receivable.accountingDocument
   → payments_accounts_receivable.clearingAccountingDocument (1:N)
 ```
+- **Coverage**: 45.53% (56/123 matched)
 - **Evidence**: Payment has `clearingAccountingDocument` pointing to invoice GL entry
-- **Verified**: Yes, payment clears (matches) invoice GL entries
+- **Verified**: Low coverage - many invoices remain unpaid in dataset timeframe.
 - **Cardinality**: 1 invoice can be paid in multiple payments (partial payments)
+- **Recommendation**: Use for payment analysis only; not reliable for complete O2C tracing.
 
 ---
 
-### ✓ Confirmed Path 7: Sales Order → Customer (Business Partner)
+### ✓ Confirmed Path 7: Sales Order → Customer (confirmed_with_normalization)
 
 ```
 sales_order_headers.soldToParty
   → business_partners.businessPartner (N:1)
 ```
-- **Verified**: Yes, `soldToParty="310000108"` matches `businessPartner` ID
+- **Coverage**: 100% (8/100 matched with normalization)
+- **Verified**: Perfect coverage with ID normalization.
 - **Cardinality**: Multiple orders per customer (N:1)
 
 ---
 
-### ✓ Confirmed Path 8: Sales Order Item → Product
+### ✓ Confirmed Path 8: Sales Order Item → Product (confirmed_with_normalization)
 
 ```
 sales_order_items.material
   → products.product (N:1)
 ```
-- **Verified**: Yes, `material="S8907367001003"` links to products
+- **Coverage**: 100% (69/167 matched with normalization)
+- **Verified**: Perfect coverage with ID normalization.
 - **Cardinality**: Multiple order items reference same product (N:1)
 
 ---
 
-### ✓ Confirmed Path 9: Outbound Delivery Item → Plant
+### ✓ Confirmed Path 9: Outbound Delivery Item → Plant (confirmed_with_normalization)
 
 ```
 outbound_delivery_items.plant
   → plants.plant (N:1)
 ```
-- **Verified**: Yes, `plant="WB05"` in delivery items matches `plants.plant`
+- **Coverage**: 100% (5/137 matched with normalization)
+- **Verified**: Perfect coverage with ID normalization.
 - **Cardinality**: Multiple deliveries from same warehouse
 
 ---
 
-### ⚠ Uncertain Path: Invoice → Delivery (via referenceDocument)
+### ✗ Not Recommended Path: Plants → Addresses (not_recommended)
 
 ```
-journal_entry_items_accounts_receivable.referenceDocument
-  → billing_document_headers.billingDocument (optional, often NULL)
+plants.addressId
+  → business_partner_addresses.addressId (no linkage)
 ```
-
-- **Issue**: `referenceDocument` column is **often NULL** (not populated)
-- **Alternative**: Use `billing_document_headers.accountingDocument` instead
-- **Recommendation**: Prefer GL-based linking, not reference field
+- **Coverage**: 0.0% (0/44 matched)
+- **Issue**: `plants.addressId` not populated or meaningful.
+- **Recommendation**: Do not use for graph edges; plants are independent entities.
 
 ---
 
-## Data Quality & Normalization Issues
+## Data Quality & Normalization Rules
+
+### Recommended Normalization Rules
+
+**1. ID Normalization**:
+- Keep all IDs as VARCHAR (not INTEGER) to preserve zero-padding
+- Normalize item numbers to canonical padded form during load:
+  ```sql
+  -- Example: Normalize salesOrderItem to 6-digit padding
+  CAST(LPAD(salesOrderItem, 6, '0') AS VARCHAR) as normalized_salesOrderItem
+  ```
+- Use normalized keys in all joins and WHERE clauses
+
+**2. Amount Fields**:
+- Cast amount fields to DECIMAL(15,2) for arithmetic:
+  ```sql
+  CAST(totalNetAmount AS DECIMAL(15,2)) as totalNetAmount_decimal
+  ```
+
+**3. Datetime Flattening**:
+- Flatten nested time objects to full ISO-8601 timestamps:
+  ```sql
+  -- Combine date + time for full timestamp
+  CONCAT(LEFT(creationDate, 10), 'T', 
+         LPAD(creationTime.hours, 2, '0'), ':',
+         LPAD(creationTime.minutes, 2, '0'), ':',
+         LPAD(creationTime.seconds, 2, '0'), '.000Z') as creationTimestamp
+  ```
+
+**4. Nullable Field Handling**:
+- Use NULL-safe joins: `COALESCE(field, '')` for string comparisons
+- Filter incomplete flows explicitly in queries
+
+---
 
 ### 1. ✓ String IDs & Zero-Padding
 
@@ -521,17 +593,17 @@ journal_entry_items_accounts_receivable.referenceDocument
 
 ---
 
-### 6. ✓ Sparse Master Data
+### 6. ✓ Full Product-Plant Matrix
 
 **Finding**: 
-- 69 products but 3,036 product-plant records (sparse matrix)
-- 44 plants, 8 business partners (small master data)
-- Large number of storage locations (16,723 records for inventory)
+- 69 products × 44 plants = 3,036 product-plant records (full matrix - all products available in all plants)
+- 44 plants, 8 business partners (small master data set)
+- Large number of storage locations (16,723 records for inventory tracking)
 
 **Implication**: 
-- Product availability is sparse (not all products in all plants)
-- Queries on storage locations may be large
-- Customer base is small (8 BPs), so customer-level aggregations are coarse
+- Product availability is universal (all products in all plants)
+- Queries on storage locations may be large and require aggregation
+- Customer base is small (8 BPs), so customer-level aggregations are coarse-grained
 
 ---
 
@@ -550,6 +622,7 @@ journal_entry_items_accounts_receivable.referenceDocument
 | `gl_entry` | journal_entry_items_accounts_receivable | `(accountingDocument, accountingDocumentItem)` | GL posting |
 | `payment` | payments_accounts_receivable | `(accountingDocument, accountingDocumentItem)` | Payment clearing |
 | `customer` | business_partners | `businessPartner` | Master data |
+| `address` | business_partner_addresses | `addressId` | Master data (customer addresses) |
 | `product` | products | `product` | Master data |
 | `plant` | plants | `plant` | Master data |
 
@@ -557,19 +630,23 @@ journal_entry_items_accounts_receivable.referenceDocument
 
 ### Recommended Edge Types (from real dataset)
 
-| Edge Type | Source | Target | Cardinality | SAP Join |
-|-----------|--------|--------|-------------|----------|
-| `INCLUDES` | `sales_order` | `sales_order_item` | 1:N | `salesOrder` FK |
-| `FULFILLED_BY` | `sales_order_item` | `outbound_delivery_item` | 1:N | `(referenceSdDocument, referenceSdDocumentItem)` |
-| `DELIVERED_IN` | `outbound_delivery` | `outbound_delivery_item` | 1:N | `deliveryDocument` FK |
-| `INVOICED_IN` | `outbound_delivery_item` | `billing_document_item` | 1:N | `(referenceSdDocument, referenceSdDocumentItem)` |
-| `CONTAINS` | `billing_document` | `billing_document_item` | 1:N | `billingDocument` FK |
-| `POSTS_GL` | `billing_document` | `gl_entry` | 1:N | `accountingDocument` FK |
-| `PAID_BY` | `gl_entry` | `payment` | 1:N | `clearingAccountingDocument` FK |
-| `ORDERED_BY` | `sales_order` | `customer` | N:1 | `soldToParty` FK |
-| `CONTAINS_MATERIAL` | `sales_order_item` | `product` | N:1 | `material` FK |
-| `SOURCED_FROM` | `outbound_delivery_item` | `plant` | N:1 | `plant` FK |
-| `BILLED_FOR` | `billing_document_item` | `product` | N:1 | `material` FK |
+| Edge Type | Source | Target | Cardinality | SAP Join | Status |
+|-----------|--------|--------|-------------|----------|--------|
+| `INCLUDES` | `sales_order` | `sales_order_item` | 1:N | `salesOrder` FK | Core |
+| `FULFILLED_BY` | `sales_order_item` | `outbound_delivery_item` | 1:N | `(referenceSdDocument, referenceSdDocumentItem)` | Core |
+| `DELIVERED_IN` | `outbound_delivery` | `outbound_delivery_item` | 1:N | `deliveryDocument` FK | Core |
+| `INVOICED_IN` | `outbound_delivery_item` | `billing_document_item` | 1:N | `(referenceSdDocument, referenceSdDocumentItem)` | Core |
+| `CONTAINS` | `billing_document` | `billing_document_item` | 1:N | `billingDocument` FK | Core |
+| `POSTS_GL` | `billing_document` | `gl_entry` | 1:N | `accountingDocument` FK | Core |
+| `PAID_BY` | `gl_entry` | `payment` | 1:N | `clearingAccountingDocument` FK | Optional (46% coverage) |
+| `ORDERED_BY` | `sales_order` | `customer` | N:1 | `soldToParty` FK | Core |
+| `LOCATED_AT` | `customer` | `address` | 1:1 | `businessPartner` FK | Core |
+| `CONTAINS_MATERIAL` | `sales_order_item` | `product` | N:1 | `material` FK | Core |
+| `SOURCED_FROM` | `outbound_delivery_item` | `plant` | N:1 | `plant` FK | Core |
+| `BILLED_FOR` | `billing_document_item` | `product` | N:1 | `material` FK | Core |
+
+**Primary O2C Trace**: Sales Order → Delivery → Billing Document → Journal Entry  
+**Payment Enrichment**: Payment is secondary enrichment if present (not reliable for complete tracing due to 46% coverage)
 
 ---
 
@@ -585,6 +662,7 @@ billing_document_item:90504248~10
 gl_entry:9400000249~1               # Composite: doc~line
 payment:9400000220~1
 customer:310000108
+address:0001                        # Address ID
 product:3001456
 plant:1920
 ```
@@ -615,58 +693,57 @@ LIMIT 10
 
 ---
 
-### 2. **Full Billing Flow Trace (Order → Delivery → Invoice → Payment)**
+### 2. **Billing Document Trace (Invoice → Delivery → Order)** (Reverse flow from billing)
 
 ```sql
 SELECT 
-  soh.salesOrder,
-  soi.salesOrderItem,
-  soi.material,
+  bdh.billingDocument,
+  bdi.billingDocumentItem,
+  bdi.material,
   odi.deliveryDocument,
-  bdi.billingDocument,
+  odi.deliveryDocumentItem,
+  odi.referenceSdDocument as salesOrder,
+  odi.referenceSdDocumentItem as salesOrderItem,
   bdh.accountingDocument,
-  par.clearingAccountingDocument,
-  CAST(soi.netAmount AS DECIMAL(15,2)) as order_amount,
-  CAST(bdh.totalNetAmount AS DECIMAL(15,2)) as invoice_amount,
-  CAST(par.amountInTransactionCurrency AS DECIMAL(15,2)) as payment_amount,
-  DATEDIFF(day, bdh.billingDocumentDate, par.clearingDate) as days_to_payment
-FROM sales_order_headers soh
-JOIN sales_order_items soi ON soh.salesOrder = soi.salesOrder
+  CAST(bdi.netAmount AS DECIMAL(15,2)) as invoice_line_amount,
+  CAST(bdh.totalNetAmount AS DECIMAL(15,2)) as invoice_total_amount,
+  bdh.billingDocumentDate
+FROM billing_document_headers bdh
+JOIN billing_document_items bdi ON bdh.billingDocument = bdi.billingDocument
 LEFT JOIN outbound_delivery_items odi 
-  ON soi.salesOrder = odi.referenceSdDocument 
-  AND soi.salesOrderItem = odi.referenceSdDocumentItem
-LEFT JOIN billing_document_items bdi 
-  ON odi.deliveryDocument = bdi.referenceSdDocument 
-  AND odi.deliveryDocumentItem = bdi.referenceSdDocumentItem
-LEFT JOIN billing_document_headers bdh ON bdi.billingDocument = bdh.billingDocument
-LEFT JOIN journal_entry_items_accounts_receivable jear 
-  ON bdh.accountingDocument = jear.accountingDocument
-LEFT JOIN payments_accounts_receivable par 
-  ON jear.accountingDocument = par.clearingAccountingDocument
-WHERE soh.salesOrder = ?  -- Single order trace
+  ON bdi.referenceSdDocument = odi.deliveryDocument 
+  AND bdi.referenceSdDocumentItem = odi.deliveryDocumentItem
+LEFT JOIN sales_order_items soi 
+  ON odi.referenceSdDocument = soi.salesOrder 
+  AND odi.referenceSdDocumentItem = soi.salesOrderItem
+WHERE bdh.billingDocument = ?  -- Single invoice trace
 ```
 
-**Data Available**: ✓ Yes, complete end-to-end flow available
+**Data Available**: ✓ Yes, reverse tracing from invoice to order  
+**Join Note**: Uses normalized composite keys; LEFT JOINs preserve incomplete flows.
 
 ---
 
-### 3. **Incomplete / Broken Flows**
+### 3. **Incomplete / Broken Flows** (Header-level counts)
 
 ```sql
--- Orders without deliveries
-SELECT COUNT(*) FROM sales_order_headers soh
+-- Orders without deliveries (aggregate at order level)
+SELECT COUNT(DISTINCT soh.salesOrder) as orders_without_delivery 
+FROM sales_order_headers soh
 LEFT JOIN outbound_delivery_items odi 
   ON soh.salesOrder = odi.referenceSdDocument
 WHERE odi.deliveryDocument IS NULL;
 
--- Deliveries without invoices
-SELECT COUNT(*) FROM outbound_delivery_items odi
+-- Deliveries without invoices (aggregate at delivery level)  
+SELECT COUNT(DISTINCT odi.deliveryDocument) as deliveries_without_invoice
+FROM outbound_delivery_items odi
 LEFT JOIN billing_document_items bdi 
   ON odi.deliveryDocument = bdi.referenceSdDocument
 WHERE bdi.billingDocument IS NULL;
 
--- Invoices without payments
-SELECT COUNT(*) FROM billing_document_headers bdh
+-- Invoices without payments (aggregate at invoice level)
+SELECT COUNT(DISTINCT bdh.billingDocument) as invoices_without_payment
+FROM billing_document_headers bdh
 LEFT JOIN journal_entry_items_accounts_receivable jear 
   ON bdh.accountingDocument = jear.accountingDocument
 LEFT JOIN payments_accounts_receivable par 
@@ -674,16 +751,17 @@ LEFT JOIN payments_accounts_receivable par
 WHERE par.clearingDate IS NULL;
 ```
 
-**Data Available**: ✓ Yes, can detect incomplete flows
+**Data Available**: ✓ Yes, can detect incomplete flows  
+**Aggregation Note**: Use DISTINCT to count unique headers, not line items.
 
 ---
 
-### 4. **Average O2C Cycle Time (Order → Payment)**
+### 4. **Average O2C Cycle Time (Order → Payment)** (Header-level aggregation)
 
 ```sql
 SELECT 
   DATEDIFF(day, soh.creationDate, par.clearingDate) as o2c_days,
-  COUNT(*) as order_count,
+  COUNT(DISTINCT soh.salesOrder) as order_count,
   MIN(DATEDIFF(day, soh.creationDate, par.clearingDate)) as min_days,
   MAX(DATEDIFF(day, soh.creationDate, par.clearingDate)) as max_days,
   AVG(DATEDIFF(day, soh.creationDate, par.clearingDate)) as avg_days
@@ -698,12 +776,13 @@ LEFT JOIN journal_entry_items_accounts_receivable jear
   ON bdh.accountingDocument = jear.accountingDocument
 LEFT JOIN payments_accounts_receivable par 
   ON jear.accountingDocument = par.clearingAccountingDocument
-WHERE par.clearingDate IS NOT NULL
-GROUP BY o2c_days
+WHERE par.clearingDate IS NOT NULL  -- Only completed flows
+GROUP BY DATEDIFF(day, soh.creationDate, par.clearingDate)
 ORDER BY order_count DESC
 ```
 
-**Data Available**: ✓ Yes, dates available from sales_order_headers.creationDate to payments_accounts_receivable.clearingDate
+**Data Available**: ✓ Yes, for completed flows only  
+**Aggregation Note**: DISTINCT order count to avoid item-level duplication; filter for completed payments.
 
 ---
 
@@ -749,14 +828,14 @@ ORDER BY payment_count DESC
 
 ```sql
 SELECT 
-  COUNT(bdc.billingDocument) as cancelled_count,
-  SUM(CAST(bdc.totalNetAmount AS DECIMAL(15,2))) as cancelled_value,
-  SUM(CAST(bdh.totalNetAmount AS DECIMAL(15,2))) as total_value
+  COUNT(DISTINCT bdc.billingDocument) as cancelled_count,
+  SUM(CAST(bdh.totalNetAmount AS DECIMAL(15,2))) as cancelled_value
 FROM billing_document_cancellations bdc
 JOIN billing_document_headers bdh ON bdc.billingDocument = bdh.billingDocument
 ```
 
-**Data Available**: ✓ Yes, 80 cancellation records with impact analysis
+**Data Available**: ✓ Yes, 80 cancellation records with impact analysis  
+**Note**: Sums cancelled amounts from original billing documents, not cancellation records.
 
 ---
 
@@ -784,16 +863,18 @@ ORDER BY delivery_count DESC
 
 ### Why Graph Projection for This Dataset?
 
+**Relational Tables as Source of Truth**: SAP data remains in normalized relational tables (DuckDB). Graph nodes and edges are derived on-demand for traversal and UI visualization - no pre-materialized graph storage.
+
 **Strengths**:
 1. **Natural SAP flow**: O2C is inherently sequential (Order → Delivery → Invoice → Payment)
-   - Graph projection captures this with explicit edge types
+   - Graph projection captures this with explicit edge types derived from FK relationships
    - Users think in "traces" and "workflows", not SQL joins
 2. **Sparse relationships**: Not all orders have all stages (incomplete flows)
-   - Graph DB would require null-heavy nodes; projection evaluates on-demand
+   - Graph projection evaluates relationships on-demand without null-heavy nodes
 3. **Flexible master data**: Products, plants, customers are reference data
    - Easy to add new master relationships without schema changes
-4. **Query-time freshness**: No pre-materialized edges = no consistency issues
-   - Always reflects current state of underlying relational data
+4. **Query-time freshness**: Edges derived from current relational data = no consistency issues
+   - Always reflects current state of underlying tables
 
 **Potential Issues**:
 1. **Join complexity**: Full O2C trace requires 6+ LEFT JOINs
