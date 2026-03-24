@@ -1,472 +1,331 @@
-from typing import List, Dict, Any, Optional
+from __future__ import annotations
+
+from typing import Any, Dict, List
 
 from ..db.connection import get_db_connection
 
+
 class QueryService:
-    def __init__(self, conn=None):
+    """Deterministic query service for SAP O2C dataset."""
+
+    def __init__(self, conn=None) -> None:
         self.conn = conn or get_db_connection()
 
-    def top_products_by_billing_count(self, limit: int = 10) -> List[Dict[str, Any]]:
-        sql = """
+    @staticmethod
+    def _normalize_item_expr(column_sql: str) -> str:
+        """Normalize item identifiers to 6-char zero-padded strings."""
+        return f"lpad(CAST({column_sql} AS VARCHAR), 6, '0')"
+
+    def top_products_by_billing_count(self, limit: int = 10) -> Dict[str, Any]:
+        """Return products ranked by distinct billing document count."""
+        rows = self.conn.execute(
+            f"""
             SELECT
-                soi.material AS product,
+                bdi.material AS product,
                 COUNT(DISTINCT bdi.billingdocument) AS billing_document_count
-            FROM sales_order_items soi
-            JOIN billing_document_items bdi
-              ON soi.salesorder = bdi.referencesddocument
-             AND lpad(CAST(soi.salesorderitem AS VARCHAR), 6, '0') = lpad(CAST(bdi.referencesddocumentitem AS VARCHAR), 6, '0')
-            WHERE soi.material IS NOT NULL
-            GROUP BY soi.material
-            ORDER BY billing_document_count DESC
-            LIMIT ?
-        """
-        try:
-            rows = self.conn.execute(sql, [limit]).fetchall()
-            return [
-                {"product": row[0], "billing_document_count": row[1]} for row in rows
-            ]
-        except Exception as e:
-            if "Table with name sales_order_items does not exist" in str(e):
-                raise RuntimeError("Database not ingested yet or required tables missing. Please run /api/ingest first.")
-            raise
+            FROM billing_document_items bdi
+            WHERE bdi.material IS NOT NULL
+            GROUP BY bdi.material
+            ORDER BY billing_document_count DESC, product ASC
+            LIMIT {int(limit)}
+            """
+        ).fetchall()
+
+        return {
+            "limit": int(limit),
+            "results": [
+                {
+                    "product": row[0],
+                    "billing_document_count": int(row[1]),
+                }
+                for row in rows
+            ],
+        }
+
+    def broken_flows(self) -> Dict[str, Any]:
+        """Return broken / incomplete O2C flow buckets."""
+        delivered_not_billed = self.conn.execute(
+            f"""
+            SELECT DISTINCT odi.deliverydocument
+            FROM outbound_delivery_items odi
+            LEFT JOIN billing_document_items bdi
+              ON odi.deliverydocument = bdi.referencesddocument
+             AND {self._normalize_item_expr('odi.deliverydocumentitem')}
+                 = {self._normalize_item_expr('bdi.referencesddocumentitem')}
+            WHERE bdi.billingdocument IS NULL
+            ORDER BY odi.deliverydocument
+            """
+        ).fetchall()
+
+        billed_without_delivery = self.conn.execute(
+            f"""
+            SELECT DISTINCT bdi.billingdocument
+            FROM billing_document_items bdi
+            LEFT JOIN outbound_delivery_items odi
+              ON odi.deliverydocument = bdi.referencesddocument
+             AND {self._normalize_item_expr('odi.deliverydocumentitem')}
+                 = {self._normalize_item_expr('bdi.referencesddocumentitem')}
+            WHERE odi.deliverydocument IS NULL
+            ORDER BY bdi.billingdocument
+            """
+        ).fetchall()
+
+        sales_orders_no_downstream = self.conn.execute(
+            f"""
+            SELECT DISTINCT soh.salesorder
+            FROM sales_order_headers soh
+            LEFT JOIN sales_order_items soi
+              ON soh.salesorder = soi.salesorder
+            LEFT JOIN outbound_delivery_items odi
+              ON soi.salesorder = odi.referencesddocument
+             AND {self._normalize_item_expr('soi.salesorderitem')}
+                 = {self._normalize_item_expr('odi.referencesddocumentitem')}
+            WHERE odi.deliverydocument IS NULL
+            ORDER BY soh.salesorder
+            """
+        ).fetchall()
+
+        return {
+            "delivered_but_not_billed": {
+                "count": len(delivered_not_billed),
+                "sample_ids": [row[0] for row in delivered_not_billed[:20]],
+            },
+            "billed_without_delivery": {
+                "count": len(billed_without_delivery),
+                "sample_ids": [row[0] for row in billed_without_delivery[:20]],
+            },
+            "sales_orders_with_no_downstream_flow": {
+                "count": len(sales_orders_no_downstream),
+                "sample_ids": [row[0] for row in sales_orders_no_downstream[:20]],
+            },
+        }
 
     def trace_billing_flow(self, billing_document_id: str) -> Dict[str, Any]:
-        try:
-            # Find all nodes and edges in the billing flow
-            nodes = {}
-            edges = []
-            summary = {}
-            # 1. Billing Document
-            bdh = self.conn.execute(
-                """
-                SELECT billingdocument, soldtoparty, accountingdocument
-                FROM billing_document_headers
-                WHERE billingdocument = ?
-                """,
-                [billing_document_id],
-            ).fetchone()
-            if not bdh:
-                return {"error": "Billing document not found"}
-            nodes["billing_document"] = {
-                "id": bdh[0],
-                "type": "BillingDocument",
-                "customer": bdh[1],
-                "accounting_document": bdh[2],
-            }
-            # 2. Billing Items
-            billing_items = self.conn.execute(
-                """
-                SELECT billingdocumentitem, material, referencesddocument, referencesddocumentitem
-                FROM billing_document_items
-                WHERE billingdocument = ?
-                """,
-                [billing_document_id],
-            ).fetchall()
-            nodes["billing_items"] = [
-                {
-                    "id": f"{billing_document_id}_{item[0]}",
-                    "type": "BillingItem",
-                    "material": item[1],
-                    "referencesddocument": item[2],
-                    "referencesddocumentitem": item[3],
-                }
-                for item in billing_items
-            ]
-            # 3. Delivery Items
-            delivery_items = []
-            for item in billing_items:
-                delivery = self.conn.execute(
-                    """
-                    SELECT deliverydocument, deliverydocumentitem, plant
-                    FROM outbound_delivery_items
-                    WHERE referencesddocument = ?
-                      AND lpad(CAST(referencesddocumentitem AS VARCHAR), 6, '0') = lpad(CAST(? AS VARCHAR), 6, '0')
-                    """,
-                    [item[2], item[3]],
-                ).fetchone()
-                if delivery:
-                    delivery_items.append({
-                        "id": f"{delivery[0]}_{delivery[1]}",
-                        "type": "DeliveryItem",
-                        "deliverydocument": delivery[0],
-                        "deliverydocumentitem": delivery[1],
-                        "plant": delivery[2],
-                    })
-            nodes["delivery_items"] = delivery_items
-            # 4. Deliveries
-            deliveries = []
-            for di in delivery_items:
-                delivery = self.conn.execute(
-                    """
-                    SELECT deliverydocument, shippingpoint
-                    FROM outbound_delivery_headers
-                    WHERE deliverydocument = ?
-                    """,
-                    [di["deliverydocument"]],
-                ).fetchone()
-                if delivery:
-                    deliveries.append({
-                        "id": delivery[0],
-                        "type": "Delivery",
-                        "shippingpoint": delivery[1],
-                    })
-            nodes["deliveries"] = deliveries
-            # 5. Sales Order Items
-            sales_order_items = []
-            for item in billing_items:
-                soi = self.conn.execute(
-                    """
-                    SELECT salesorder, salesorderitem, material
-                    FROM sales_order_items
-                    WHERE salesorder = ?
-                      AND lpad(CAST(salesorderitem AS VARCHAR), 6, '0') = lpad(CAST(? AS VARCHAR), 6, '0')
-                    """,
-                    [item[2], item[3]],
-                ).fetchone()
-                if soi:
-                    sales_order_items.append({
-                        "id": f"{soi[0]}_{soi[1]}",
-                        "type": "SalesOrderItem",
-                        "salesorder": soi[0],
-                        "salesorderitem": soi[1],
-                        "material": soi[2],
-                    })
-            nodes["sales_order_items"] = sales_order_items
-            # 6. Sales Orders
-            sales_orders = []
-            for soi in sales_order_items:
-                so = self.conn.execute(
-                    """
-                    SELECT salesorder, soldtoparty
-                    FROM sales_order_headers
-                    WHERE salesorder = ?
-                    """,
-                    [soi["salesorder"]],
-                ).fetchone()
-                if so:
-                    sales_orders.append({
-                        "id": so[0],
-                        "type": "SalesOrder",
-                        "soldtoparty": so[1],
-                    })
-            nodes["sales_orders"] = sales_orders
-            # 7. Journal Entry
-            journal_entry = None
-            if bdh[2]:
-                je = self.conn.execute(
-                    """
-                    SELECT accountingdocument, accountingdocumentitem, amountintransactioncurrency
-                    FROM journal_entry_items_accounts_receivable
-                    WHERE accountingdocument = ?
-                    LIMIT 1
-                    """,
-                    [bdh[2]],
-                ).fetchone()
-                if je:
-                    journal_entry = {
-                        "id": f"{je[0]}_{je[1]}",
-                        "type": "JournalEntry",
-                        "amount": je[2],
-                    }
-            nodes["journal_entry"] = journal_entry
-            # Edges (simple, for UI highlighting)
-            # (BillingDocument -> BillingItem -> DeliveryItem -> Delivery -> SalesOrderItem -> SalesOrder -> Journal Entry)
-            # Build edges as (source_id, target_id, type)
-            edges = []
-            for item in nodes["billing_items"]:
-                edges.append({
-                    "source": bdh[0],
-                    "target": item["id"],
-                    "type": "HAS_BILLING_ITEM",
-                })
-            for di in nodes["delivery_items"]:
-                for item in nodes["billing_items"]:
-                    edges.append({
-                        "source": item["id"],
-                        "target": di["id"],
-                        "type": "BILLED_DELIVERY_ITEM",
-                    })
-            for d in nodes["deliveries"]:
-                for di in nodes["delivery_items"]:
-                    edges.append({
-                        "source": di["id"],
-                        "target": d["id"],
-                        "type": "DELIVERY_OF_ITEM",
-                    })
-            for soi in nodes["sales_order_items"]:
-                for item in nodes["billing_items"]:
-                    edges.append({
-                        "source": item["id"],
-                        "target": soi["id"],
-                        "type": "BILLED_SALES_ORDER_ITEM",
-                    })
-            for so in nodes["sales_orders"]:
-                for soi in nodes["sales_order_items"]:
-                    edges.append({
-                        "source": soi["id"],
-                        "target": so["id"],
-                        "type": "SALES_ORDER_OF_ITEM",
-                    })
-            if journal_entry:
-                for so in nodes["sales_orders"]:
-                    edges.append({
-                        "source": so["id"],
-                        "target": journal_entry["id"],
-                        "type": "POSTED_TO_JOURNAL_ENTRY",
-                    })
-            summary = {
-                "billing_document": bdh[0],
-                "customer": bdh[1],
-                "accounting_document": bdh[2],
-                "billing_items": len(nodes["billing_items"]),
-                "delivery_items": len(nodes["delivery_items"]),
-                "sales_order_items": len(nodes["sales_order_items"]),
-                "sales_orders": len(nodes["sales_orders"]),
-                "journal_entry": bool(journal_entry),
-            }
-            return {"nodes": nodes, "edges": edges, "summary": summary}
-        except Exception as e:
-            if "does not exist" in str(e):
-                raise RuntimeError("Database not ingested yet or required tables missing. Please run /api/ingest first.")
-            raise
-        # Find all nodes and edges in the billing flow
-        nodes = {}
-        edges = []
-        summary = {}
-        # 1. Billing Document
-        bdh = self.conn.execute(
+        """Trace a billing document through billing, delivery, order, and journal entry."""
+        header = self.conn.execute(
             """
-            SELECT billingdocument, soldtoparty, accountingdocument
+            SELECT billingdocument, accountingdocument, soldtoparty
             FROM billing_document_headers
             WHERE billingdocument = ?
             """,
             [billing_document_id],
         ).fetchone()
-        if not bdh:
-            return {"error": "Billing document not found"}
-        nodes["billing_document"] = {
-            "id": bdh[0],
-            "type": "BillingDocument",
-            "customer": bdh[1],
-            "accounting_document": bdh[2],
-        }
-        # 2. Billing Items
-        billing_items = self.conn.execute(
-            """
-            SELECT billingdocumentitem, material, referencesddocument, referencesddocumentitem
-            FROM billing_document_items
-            WHERE billingdocument = ?
+
+        if not header:
+            raise ValueError(f"Billing document {billing_document_id} not found.")
+
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                bdi.billingdocument,
+                bdi.billingdocumentitem,
+                bdi.referencesddocument AS deliverydocument,
+                bdi.referencesddocumentitem AS deliverydocumentitem,
+                odi.referencesddocument AS salesorder,
+                odi.referencesddocumentitem AS salesorderitem,
+                bdh.accountingdocument,
+                bdh.soldtoparty
+            FROM billing_document_items bdi
+            LEFT JOIN outbound_delivery_items odi
+              ON odi.deliverydocument = bdi.referencesddocument
+             AND {self._normalize_item_expr('odi.deliverydocumentitem')}
+                 = {self._normalize_item_expr('bdi.referencesddocumentitem')}
+            LEFT JOIN billing_document_headers bdh
+              ON bdi.billingdocument = bdh.billingdocument
+            WHERE bdi.billingdocument = ?
+            ORDER BY bdi.billingdocumentitem
             """,
             [billing_document_id],
         ).fetchall()
-        nodes["billing_items"] = [
+
+        nodes: List[Dict[str, Any]] = []
+        edges: List[Dict[str, Any]] = []
+        seen_nodes = set()
+        seen_edges = set()
+
+        def add_node(node_id: str, node_type: str, label: str, metadata: Dict[str, Any] | None = None) -> None:
+            if node_id not in seen_nodes:
+                seen_nodes.add(node_id)
+                nodes.append(
+                    {
+                        "node_id": node_id,
+                        "node_type": node_type,
+                        "label": label,
+                        "metadata": metadata or {},
+                    }
+                )
+
+        def add_edge(edge_id: str, source_id: str, target_id: str, edge_type: str) -> None:
+            if edge_id not in seen_edges:
+                seen_edges.add(edge_id)
+                edges.append(
+                    {
+                        "edge_id": edge_id,
+                        "source_id": source_id,
+                        "target_id": target_id,
+                        "edge_type": edge_type,
+                    }
+                )
+
+        billing_doc_id, accounting_doc, sold_to_party = header
+
+        add_node(
+            f"billingdocument_{billing_doc_id}",
+            "BillingDocument",
+            f"Invoice {billing_doc_id}",
             {
-                "id": f"{billing_document_id}_{item[0]}",
-                "type": "BillingItem",
-                "material": item[1],
-                "referencesddocument": item[2],
-                "referencesddocumentitem": item[3],
-            }
-            for item in billing_items
-        ]
-        # 3. Delivery Items
-        delivery_items = []
-        for item in billing_items:
-            delivery = self.conn.execute(
+                "billingdocument": billing_doc_id,
+                "accountingdocument": accounting_doc,
+                "soldtoparty": sold_to_party,
+            },
+        )
+
+        if sold_to_party:
+            add_node(
+                f"customer_{sold_to_party}",
+                "Customer",
+                str(sold_to_party),
+                {"businesspartner": sold_to_party},
+            )
+            add_edge(
+                f"billing_document_for_customer_{billing_doc_id}",
+                f"billingdocument_{billing_doc_id}",
+                f"customer_{sold_to_party}",
+                "BILLING_DOCUMENT_FOR_CUSTOMER",
+            )
+
+        if accounting_doc:
+            je_rows = self.conn.execute(
                 """
-                SELECT deliverydocument, deliverydocumentitem, plant
-                FROM outbound_delivery_items
-                WHERE referencesddocument = ?
-                  AND lpad(CAST(referencesddocumentitem AS VARCHAR), 6, '0') = lpad(CAST(? AS VARCHAR), 6, '0')
-                """,
-                [item[2], item[3]],
-            ).fetchone()
-            if delivery:
-                delivery_items.append({
-                    "id": f"{delivery[0]}_{delivery[1]}",
-                    "type": "DeliveryItem",
-                    "deliverydocument": delivery[0],
-                    "deliverydocumentitem": delivery[1],
-                    "plant": delivery[2],
-                })
-        nodes["delivery_items"] = delivery_items
-        # 4. Deliveries
-        deliveries = []
-        for di in delivery_items:
-            delivery = self.conn.execute(
-                """
-                SELECT deliverydocument, shippingpoint
-                FROM outbound_delivery_headers
-                WHERE deliverydocument = ?
-                """,
-                [di["deliverydocument"]],
-            ).fetchone()
-            if delivery:
-                deliveries.append({
-                    "id": delivery[0],
-                    "type": "Delivery",
-                    "shippingpoint": delivery[1],
-                })
-        nodes["deliveries"] = deliveries
-        # 5. Sales Order Items
-        sales_order_items = []
-        for item in billing_items:
-            soi = self.conn.execute(
-                """
-                SELECT salesorder, salesorderitem, material
-                FROM sales_order_items
-                WHERE salesorder = ?
-                  AND lpad(CAST(salesorderitem AS VARCHAR), 6, '0') = lpad(CAST(? AS VARCHAR), 6, '0')
-                """,
-                [item[2], item[3]],
-            ).fetchone()
-            if soi:
-                sales_order_items.append({
-                    "id": f"{soi[0]}_{soi[1]}",
-                    "type": "SalesOrderItem",
-                    "salesorder": soi[0],
-                    "salesorderitem": soi[1],
-                    "material": soi[2],
-                })
-        nodes["sales_order_items"] = sales_order_items
-        # 6. Sales Orders
-        sales_orders = []
-        for soi in sales_order_items:
-            so = self.conn.execute(
-                """
-                SELECT salesorder, soldtoparty
-                FROM sales_order_headers
-                WHERE salesorder = ?
-                """,
-                [soi["salesorder"]],
-            ).fetchone()
-            if so:
-                sales_orders.append({
-                    "id": so[0],
-                    "type": "SalesOrder",
-                    "soldtoparty": so[1],
-                })
-        nodes["sales_orders"] = sales_orders
-        # 7. Journal Entry
-        journal_entry = None
-        if bdh[2]:
-            je = self.conn.execute(
-                """
-                SELECT accountingdocument, accountingdocumentitem, amountintransactioncurrency
+                SELECT accountingdocument, accountingdocumentitem
                 FROM journal_entry_items_accounts_receivable
                 WHERE accountingdocument = ?
-                LIMIT 1
+                ORDER BY accountingdocumentitem
                 """,
-                [bdh[2]],
-            ).fetchone()
-            if je:
-                journal_entry = {
-                    "id": f"{je[0]}_{je[1]}",
-                    "type": "JournalEntry",
-                    "amount": je[2],
-                }
-        nodes["journal_entry"] = journal_entry
-        # Edges (simple, for UI highlighting)
-        # (BillingDocument -> BillingItem -> DeliveryItem -> Delivery -> SalesOrderItem -> SalesOrder -> JournalEntry)
-        # Build edges as (source_id, target_id, type)
-        edges = []
-        for item in nodes["billing_items"]:
-            edges.append({
-                "source": bdh[0],
-                "target": item["id"],
-                "type": "HAS_BILLING_ITEM",
-            })
-        for di in nodes["delivery_items"]:
-            for item in nodes["billing_items"]:
-                edges.append({
-                    "source": item["id"],
-                    "target": di["id"],
-                    "type": "BILLED_DELIVERY_ITEM",
-                })
-        for d in nodes["deliveries"]:
-            for di in nodes["delivery_items"]:
-                edges.append({
-                    "source": di["id"],
-                    "target": d["id"],
-                    "type": "DELIVERY_OF_ITEM",
-                })
-        for soi in nodes["sales_order_items"]:
-            for item in nodes["billing_items"]:
-                edges.append({
-                    "source": item["id"],
-                    "target": soi["id"],
-                    "type": "BILLED_SALES_ORDER_ITEM",
-                })
-        for so in nodes["sales_orders"]:
-            for soi in nodes["sales_order_items"]:
-                edges.append({
-                    "source": soi["id"],
-                    "target": so["id"],
-                    "type": "SALES_ORDER_OF_ITEM",
-                })
-        if journal_entry:
-            for so in nodes["sales_orders"]:
-                edges.append({
-                    "source": so["id"],
-                    "target": journal_entry["id"],
-                    "type": "POSTED_TO_JOURNAL_ENTRY",
-                })
-        summary = {
-            "billing_document": bdh[0],
-            "customer": bdh[1],
-            "accounting_document": bdh[2],
-            "billing_items": len(nodes["billing_items"]),
-            "delivery_items": len(nodes["delivery_items"]),
-            "sales_order_items": len(nodes["sales_order_items"]),
-            "sales_orders": len(nodes["sales_orders"]),
-            "journal_entry": bool(journal_entry),
-        }
-        return {"nodes": nodes, "edges": edges, "summary": summary}
+                [accounting_doc],
+            ).fetchall()
 
-    def broken_flows(self) -> Dict[str, Any]:
-        try:
-            # Delivered but not billed
-            delivered_not_billed = self.conn.execute(
-                """
-                SELECT DISTINCT odi.deliverydocument
-                FROM outbound_delivery_items odi
-                LEFT JOIN billing_document_items bdi
-                  ON odi.deliverydocument = bdi.referencesddocument
-                 AND lpad(CAST(odi.deliverydocumentitem AS VARCHAR), 6, '0') = lpad(CAST(bdi.referencesddocumentitem AS VARCHAR), 6, '0')
-                WHERE bdi.billingdocument IS NULL
-                """
-            ).fetchall()
-            # Billed without delivery
-            billed_without_delivery = self.conn.execute(
-                """
-                SELECT DISTINCT bdi.billingdocument
-                FROM billing_document_items bdi
-                LEFT JOIN outbound_delivery_items odi
-                  ON bdi.referencesddocument = odi.deliverydocument
-                 AND lpad(CAST(bdi.referencesddocumentitem AS VARCHAR), 6, '0') = lpad(CAST(odi.deliverydocumentitem AS VARCHAR), 6, '0')
-                WHERE odi.deliverydocument IS NULL
-                """
-            ).fetchall()
-            # Sales orders with no downstream flow
-            sales_orders_no_flow = self.conn.execute(
-                """
-                SELECT soh.salesorder
-                FROM sales_order_headers soh
-                LEFT JOIN sales_order_items soi ON soh.salesorder = soi.salesorder
-                LEFT JOIN outbound_delivery_items odi ON soi.salesorder = odi.referencesddocument
-                 AND lpad(CAST(soi.salesorderitem AS VARCHAR), 6, '0') = lpad(CAST(odi.referencesddocumentitem AS VARCHAR), 6, '0')
-                LEFT JOIN billing_document_items bdi ON soi.salesorder = bdi.referencesddocument
-                 AND lpad(CAST(soi.salesorderitem AS VARCHAR), 6, '0') = lpad(CAST(bdi.referencesddocumentitem AS VARCHAR), 6, '0')
-                WHERE odi.deliverydocument IS NULL AND bdi.billingdocument IS NULL
-                GROUP BY soh.salesorder
-                """
-            ).fetchall()
-            return {
-                "delivered_not_billed": [row[0] for row in delivered_not_billed],
-                "billed_without_delivery": [row[0] for row in billed_without_delivery],
-                "sales_orders_no_flow": [row[0] for row in sales_orders_no_flow],
-            }
-        except Exception as e:
-            if "does not exist" in str(e):
-                raise RuntimeError("Database not ingested yet or required tables missing. Please run /api/ingest first.")
-            raise
+            for je in je_rows:
+                je_node_id = f"journalentry_{je[0]}_{je[1]}"
+                add_node(
+                    je_node_id,
+                    "JournalEntry",
+                    f"JE {je[0]}",
+                    {
+                        "accountingdocument": je[0],
+                        "accountingdocumentitem": je[1],
+                    },
+                )
+                add_edge(
+                    f"billing_document_posted_to_journal_entry_{billing_doc_id}_{je[0]}_{je[1]}",
+                    f"billingdocument_{billing_doc_id}",
+                    je_node_id,
+                    "BILLING_DOCUMENT_POSTED_TO_JOURNAL_ENTRY",
+                )
+
+        for row in rows:
+            (
+                billingdocument,
+                billingdocumentitem,
+                deliverydocument,
+                deliverydocumentitem,
+                salesorder,
+                salesorderitem,
+                _accountingdocument,
+                _soldtoparty,
+            ) = row
+
+            billing_item_id = f"billingitem_{billingdocument}_{str(billingdocumentitem).zfill(6)}"
+            add_node(
+                billing_item_id,
+                "BillingItem",
+                f"Item {billingdocumentitem}",
+                {
+                    "billingdocument": billingdocument,
+                    "billingdocumentitem": billingdocumentitem,
+                },
+            )
+            add_edge(
+                f"billing_item_in_document_{billingdocument}_{str(billingdocumentitem).zfill(6)}",
+                billing_item_id,
+                f"billingdocument_{billingdocument}",
+                "BILLING_ITEM_IN_DOCUMENT",
+            )
+
+            if deliverydocument:
+                delivery_id = f"delivery_{deliverydocument}"
+                delivery_item_id = f"deliveryitem_{deliverydocument}_{str(deliverydocumentitem).zfill(6)}"
+
+                add_node(
+                    delivery_id,
+                    "Delivery",
+                    f"Delivery {deliverydocument}",
+                    {"deliverydocument": deliverydocument},
+                )
+                add_node(
+                    delivery_item_id,
+                    "DeliveryItem",
+                    f"Item {deliverydocumentitem}",
+                    {
+                        "deliverydocument": deliverydocument,
+                        "deliverydocumentitem": deliverydocumentitem,
+                    },
+                )
+
+                add_edge(
+                    f"delivery_item_in_delivery_{deliverydocument}_{str(deliverydocumentitem).zfill(6)}",
+                    delivery_item_id,
+                    delivery_id,
+                    "DELIVERY_ITEM_IN_DELIVERY",
+                )
+                add_edge(
+                    f"delivery_item_billed_by_billing_item_{deliverydocument}_{str(deliverydocumentitem).zfill(6)}_{billingdocument}_{str(billingdocumentitem).zfill(6)}",
+                    delivery_item_id,
+                    billing_item_id,
+                    "DELIVERY_ITEM_BILLED_BY_BILLING_ITEM",
+                )
+
+            if salesorder:
+                sales_order_id = f"salesorder_{salesorder}"
+                sales_order_item_id = f"salesorderitem_{salesorder}_{str(salesorderitem).zfill(6)}"
+
+                add_node(
+                    sales_order_id,
+                    "SalesOrder",
+                    f"Order {salesorder}",
+                    {"salesorder": salesorder},
+                )
+                add_node(
+                    sales_order_item_id,
+                    "SalesOrderItem",
+                    f"Item {salesorderitem}",
+                    {
+                        "salesorder": salesorder,
+                        "salesorderitem": salesorderitem,
+                    },
+                )
+
+                add_edge(
+                    f"order_has_item_{salesorder}_{str(salesorderitem).zfill(6)}",
+                    sales_order_id,
+                    sales_order_item_id,
+                    "ORDER_HAS_ITEM",
+                )
+
+                if deliverydocument:
+                    add_edge(
+                        f"item_fulfilled_by_delivery_item_{salesorder}_{str(salesorderitem).zfill(6)}_{deliverydocument}_{str(deliverydocumentitem).zfill(6)}",
+                        sales_order_item_id,
+                        f"deliveryitem_{deliverydocument}_{str(deliverydocumentitem).zfill(6)}",
+                        "ITEM_FULFILLED_BY_DELIVERY_ITEM",
+                    )
+
+        return {
+            "billing_document_id": billing_document_id,
+            "summary": {
+                "nodes": len(nodes),
+                "edges": len(edges),
+            },
+            "nodes": nodes,
+            "edges": edges,
+        }
