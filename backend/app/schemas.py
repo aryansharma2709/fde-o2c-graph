@@ -62,3 +62,18 @@ class SubgraphResponse(BaseModel):
     """Subgraph response for neighborhood."""
     nodes: List[NodeDetail]
     edges: List[EdgeDetail]
+
+
+class ChatRequest(BaseModel):
+    """Chat request with natural language prompt."""
+    prompt: str
+
+
+class ChatResponse(BaseModel):
+    """Chat response with grounded data and intent."""
+    answer_text: str
+    intent: str
+    cited_data_summary: Dict[str, Any]
+    referenced_node_ids: List[str] = []
+    referenced_edge_ids: List[str] = []
+    requires_clarification: bool = False

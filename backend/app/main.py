@@ -7,6 +7,7 @@ from .routers.ingest import router as ingest_router
 
 from .routers.graph import router as graph_router
 from .routers.query import router as query_router
+from .routers.chat import router as chat_router
 
 app = FastAPI(
     title="O2C Graph Explorer API",
@@ -31,6 +32,7 @@ app.include_router(health_router, prefix="/api")
 app.include_router(ingest_router, prefix="/api")
 app.include_router(graph_router, prefix="/api")
 app.include_router(query_router)
+app.include_router(chat_router)
 
 
 @app.get("/")
