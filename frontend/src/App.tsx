@@ -33,6 +33,8 @@ type ChatResponse = {
   requires_clarification?: boolean;
 };
 
+type ChatHistoryItem = ChatResponse & { prompt: string };
+
 const EXAMPLE_PROMPTS = [
   'Which products are associated with the highest number of billing documents?',
   'Trace billing document 90504248',
@@ -87,10 +89,14 @@ const App: React.FC = () => {
   const [chatResult, setChatResult] = useState<ChatResponse | null>(null);
   const [chatError, setChatError] = useState<string>('');
   const [loadingChat, setLoadingChat] = useState(false);
+  const [chatHistory, setChatHistory] = useState<ChatHistoryItem[]>([]);
+  const [selectedHistoryIndex, setSelectedHistoryIndex] = useState<number | null>(null);
   const [loadingGraph, setLoadingGraph] = useState(false);
 
   const [highlightedNodeIds, setHighlightedNodeIds] = useState<string[]>([]);
   const [highlightedEdgeIds, setHighlightedEdgeIds] = useState<string[]>([]);
+
+  const [graphStats, setGraphStats] = useState({ totalNodes: 0, totalEdges: 0 });
 
   const loadOverview = async () => {
     setLoadingGraph(true);
@@ -98,10 +104,15 @@ const App: React.FC = () => {
       const data = await api.getGraphOverview();
       setNodes(data.sample_nodes || []);
       setEdges(data.sample_edges || []);
+      setGraphStats({
+        totalNodes: data.sample_nodes?.length || 0,
+        totalEdges: data.sample_edges?.length || 0,
+      });
     } catch (err) {
       console.error('Failed to load graph overview:', err);
       setNodes([]);
       setEdges([]);
+      setGraphStats({ totalNodes: 0, totalEdges: 0 });
     } finally {
       setLoadingGraph(false);
     }
@@ -177,6 +188,11 @@ const App: React.FC = () => {
     try {
       const result = await api.sendChatPrompt(text.trim());
       setChatResult(result);
+      setChatHistory((prev) => [
+        { prompt: text.trim(), ...result },
+        ...prev,
+      ].slice(0, 20));
+      setSelectedHistoryIndex(0);
       setPrompt(text.trim());
 
       const refNodes = result.referenced_node_ids || [];
@@ -196,6 +212,27 @@ const App: React.FC = () => {
     }
   };
 
+  const restoreHistory = async (index: number) => {
+    const item = chatHistory[index];
+    if (!item) return;
+
+    setSelectedHistoryIndex(index);
+    setPrompt(item.prompt);
+    setChatResult(item);
+    setChatError('');
+    setHighlightedNodeIds(item.referenced_node_ids || []);
+    setHighlightedEdgeIds(item.referenced_edge_ids || []);
+
+    if (item.referenced_node_ids && item.referenced_node_ids.length > 0) {
+      try {
+        const subgraph = await api.getSubgraph(item.referenced_node_ids[0], 1);
+        mergeSubgraph(subgraph);
+      } catch (error) {
+        console.warn('Failed to load subgraph from history item:', error);
+      }
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await sendPrompt(prompt);
@@ -203,34 +240,31 @@ const App: React.FC = () => {
 
   return (
     <div style={{ height: '100vh', display: 'flex', background: '#f8fafc', color: '#0f172a' }}>
-      <div style={{ flex: 2.2, borderRight: '1px solid #dbeafe', display: 'flex', flexDirection: 'column' }}>
-        <div
-          style={{
-            padding: 16,
-            borderBottom: '1px solid #dbeafe',
-            background: '#ffffff',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-          }}
-        >
-          <h2 style={{ margin: 0, fontSize: 20 }}>O2C Graph Explorer</h2>
-          <button
-            type="button"
-            onClick={handleIngest}
-            style={{
-              padding: '10px 14px',
-              borderRadius: 10,
-              border: '1px solid #2563eb',
-              background: '#2563eb',
-              color: 'white',
-              cursor: 'pointer',
-              fontWeight: 600,
-            }}
-          >
-            Ingest Data
-          </button>
-          {loadingGraph && <span>Loading graph...</span>}
+      <div style={{ flex: 1.8, borderRight: '1px solid #dbeafe', display: 'flex', flexDirection: 'column' }}>
+        <div className="panel" style={{ border: 'none', borderBottom: '1px solid #dbeafe', borderRadius: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+            <h2 style={{ margin: 0, fontSize: 20 }}>O2C Graph Explorer</h2>
+            <button
+              type="button"
+              onClick={handleIngest}
+              style={{
+                padding: '10px 14px',
+                borderRadius: 10,
+                border: '1px solid #2563eb',
+                background: '#2563eb',
+                color: 'white',
+                cursor: 'pointer',
+                fontWeight: 600,
+              }}
+            >
+              Ingest Data
+            </button>
+            {loadingGraph && <span>Loading graph...</span>}
+          </div>
+          <div className="status-bar">
+            Graph: {graphStats.totalNodes} nodes, {graphStats.totalEdges} edges
+            {highlightedNodeIds.length > 0 && ` | Highlighted: ${highlightedNodeIds.length} nodes, ${highlightedEdgeIds.length} edges`}
+          </div>
         </div>
 
         <div style={{ flex: 1 }}>
@@ -247,8 +281,8 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#ffffff' }}>
-        <div style={{ padding: 20, borderBottom: '1px solid #e2e8f0' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+        <div className="panel" style={{ border: 'none', borderBottom: '1px solid #dbeafe', borderRadius: 0, flex: 1 }}>
           <h2 style={{ marginTop: 0 }}>Chat</h2>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
@@ -301,7 +335,7 @@ const App: React.FC = () => {
           </form>
         </div>
 
-        <div style={{ padding: 20, borderBottom: '1px solid #e2e8f0', minHeight: 220 }}>
+        <div className="panel" style={{ border: 'none', borderBottom: '1px solid #dbeafe', borderRadius: 0, minHeight: 220 }}>
           <h3 style={{ marginTop: 0 }}>Response</h3>
 
           {chatError && (
@@ -351,9 +385,42 @@ const App: React.FC = () => {
           )}
         </div>
 
-        <div style={{ padding: 20, flex: 1, overflow: 'auto' }}>
+        <div className="panel" style={{ border: 'none', borderBottom: '1px solid #dbeafe', borderRadius: 0, minHeight: 220 }}>
+          <h3 style={{ marginTop: 0 }}>Chat History</h3>
+          {chatHistory.length === 0 ? (
+            <div style={{ fontSize: 12, color: '#6b7280' }}>No previous messages yet.</div>
+          ) : (
+            <ul style={{ listStyle: 'none', margin: 0, padding: 0, maxHeight: 180, overflowY: 'auto' }}>
+              {chatHistory.map((entry, idx) => (
+                <li
+                  key={`${entry.prompt}-${idx}`}
+                  onClick={() => restoreHistory(idx)}
+                  style={{
+                    border: selectedHistoryIndex === idx ? '1px solid #2563eb' : '1px solid #e2e8f0',
+                    background: selectedHistoryIndex === idx ? '#dbeafe' : '#fff',
+                    borderRadius: 8,
+                    padding: 8,
+                    marginBottom: 6,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <strong style={{ display: 'block', fontSize: 13 }}>Q: {entry.prompt}</strong>
+                  <span style={{ display: 'block', fontSize: 12, color: '#374151' }}>
+                    A: {entry.answer_text.slice(0, 80)}{entry.answer_text.length > 80 ? '...' : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="panel" style={{ border: 'none', borderRadius: 0, flex: 1 }}>
           <h3 style={{ marginTop: 0 }}>Node Details</h3>
-          {!selectedNodeId && <div>Select a node to view details</div>}
+
+          {!selectedNodeId && <p>Click a node to view details</p>}
+
+          {selectedNodeId && !nodeDetails && <p>Loading...</p>}
+
           {selectedNodeId && nodeDetails && (
             <pre
               style={{

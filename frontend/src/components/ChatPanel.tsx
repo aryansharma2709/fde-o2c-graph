@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { api } from '../services/api';
 import { ChatResponse } from '../types';
+import { Background } from 'reactflow';
 
 interface ChatPanelProps {
   onReferencedNodes: (nodeIds: string[]) => void;
@@ -31,7 +32,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ onReferencedNodes }) => {
   };
 
   const examplePrompts = [
-    'Which products are associated with the highest number of billing documents?',
+    'Which products are associated with the highest number of billing documents?';,
     'Trace billing document 90504248',
     'Show broken flows',
   ];
@@ -69,7 +70,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ onReferencedNodes }) => {
           placeholder="Ask about the O2C data..."
           style={{ width: '100%', padding: '10px' }}
         />
-        <button type="submit" disabled={loading} style={{ marginTop: '10px', padding: '10px' }}>
+        <button type="submit" disabled={loading} style={{ marginTop: '10px', padding: '10px'}}>
           {loading ? 'Sending...' : 'Send'}
         </button>
       </form>
