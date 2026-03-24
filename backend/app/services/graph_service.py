@@ -11,8 +11,8 @@ from ..db.connection import get_db_connection
 class GraphService:
     """Service for graph operations on SAP O2C data."""
 
-    def __init__(self) -> None:
-        self.conn = get_db_connection()
+    def __init__(self, conn=None) -> None:
+        self.conn = conn or get_db_connection()
 
     @staticmethod
     def _parse_json(value: Any) -> Dict[str, Any]:
@@ -32,26 +32,22 @@ class GraphService:
         """Build graph nodes from relational tables and return node count."""
         self.conn.execute("DELETE FROM graph_nodes")
 
-        # Customer
         self.conn.execute(
             """
             INSERT INTO graph_nodes (node_id, node_type, label, metadata_json)
             SELECT DISTINCT
-                'customer_' || businesspartner AS node_id,
+                'customer_' || businessPartner AS node_id,
                 'Customer' AS node_type,
-                COALESCE(businesspartnerfullname, businesspartner) AS label,
+                COALESCE(businessPartnerFullName, businessPartnerName, businessPartner) AS label,
                 json_object(
-                    'business_partner', businesspartner,
-                    'name', businesspartnerfullname,
-                    'type', businesspartnertype,
-                    'category', businesspartnercategory
+                    'businessPartner', businessPartner,
+                    'name', businessPartnerFullName,
+                    'category', businessPartnerCategory
                 ) AS metadata_json
             FROM business_partners
-            WHERE businesspartnertype = 'Customer'
             """
         )
 
-        # Address
         self.conn.execute(
             """
             INSERT INTO graph_nodes (node_id, node_type, label, metadata_json)
@@ -71,7 +67,6 @@ class GraphService:
             """
         )
 
-        # Sales Order
         self.conn.execute(
             """
             INSERT INTO graph_nodes (node_id, node_type, label, metadata_json)
@@ -92,106 +87,94 @@ class GraphService:
             """
         )
 
-        # Sales Order Item
         self.conn.execute(
-            """
-            INSERT INTO graph_nodes (node_id, node_type, label, metadata_json)
-            SELECT DISTINCT
-                'salesorderitem_' || salesorder || '_' || lpad(CAST(salesorderitem AS VARCHAR), 6, '0') AS node_id,
-                'SalesOrderItem' AS node_type,
-                'Item ' || salesorderitem AS label,
-                json_object(
-                    'sales_order', salesorder,
-                    'item', salesorderitem,
-                    'material', material,
-                    'quantity', requestedquantity,
-                    'unit', baseunit,
-                    'net_amount', netamount,
-                    'currency', transactioncurrency
-                ) AS metadata_json
-            FROM sales_order_items
-            """
-        )
+    """
+    INSERT INTO graph_nodes (node_id, node_type, label, metadata_json)
+    SELECT DISTINCT
+        'salesorderitem_' || salesorder || '_' || lpad(CAST(salesorderitem AS VARCHAR), 6, '0') AS node_id,
+        'SalesOrderItem' AS node_type,
+        'Item ' || salesorderitem AS label,
+        json_object(
+            'sales_order', salesorder,
+            'item', salesorderitem,
+            'material', material,
+            'quantity', requestedquantity,
+            'net_amount', netamount,
+            'currency', transactioncurrency
+        ) AS metadata_json
+    FROM sales_order_items
+    """
+)
 
-        # Product
         self.conn.execute(
-            """
-            INSERT INTO graph_nodes (node_id, node_type, label, metadata_json)
-            SELECT DISTINCT
-                'product_' || product AS node_id,
-                'Product' AS node_type,
-                COALESCE(productdescription, product) AS label,
-                json_object(
-                    'product', product,
-                    'type', producttype,
-                    'description', productdescription,
-                    'base_unit', baseunit,
-                    'material_group', materialgroup
-                ) AS metadata_json
-            FROM products
-            """
-        )
+    """
+    INSERT INTO graph_nodes (node_id, node_type, label, metadata_json)
+    SELECT DISTINCT
+        'product_' || product AS node_id,
+        'Product' AS node_type,
+        product AS label,
+        json_object(
+            'product', product
+        ) AS metadata_json
+    FROM products
+    """
+)
 
-        # Delivery
         self.conn.execute(
             """
             INSERT INTO graph_nodes (node_id, node_type, label, metadata_json)
             SELECT DISTINCT
-                'delivery_' || deliverydocument AS node_id,
+                'delivery_' || deliveryDocument AS node_id,
                 'Delivery' AS node_type,
-                'Delivery ' || deliverydocument AS label,
+                'Delivery ' || deliveryDocument AS label,
                 json_object(
-                    'delivery_document', deliverydocument,
-                    'type', deliverydocumenttype,
-                    'date', deliverydate,
-                    'shipping_point', shippingpoint,
-                    'status', overalldeliverystatus
+                    'deliveryDocument', deliveryDocument,
+                    'shippingPoint', shippingPoint
                 ) AS metadata_json
             FROM outbound_delivery_headers
             """
         )
 
-        # Delivery Item
         self.conn.execute(
             """
             INSERT INTO graph_nodes (node_id, node_type, label, metadata_json)
             SELECT DISTINCT
-                'deliveryitem_' || deliverydocument || '_' || lpad(CAST(deliverydocumentitem AS VARCHAR), 6, '0') AS node_id,
+                'deliveryitem_' || deliveryDocument || '_' || lpad(CAST(deliveryDocumentItem AS VARCHAR), 6, '0') AS node_id,
                 'DeliveryItem' AS node_type,
-                'Item ' || deliverydocumentitem AS label,
+                'Item ' || deliveryDocumentItem AS label,
                 json_object(
-                    'delivery_document', deliverydocument,
-                    'item', deliverydocumentitem,
-                    'material', material,
-                    'actual_quantity', actualdeliveryquantity,
-                    'sales_order', referencesddocument,
-                    'sales_order_item', referencesddocumentitem,
+                    'deliveryDocument', deliveryDocument,
+                    'item', deliveryDocumentItem,
+                    'actualDeliveryQuantity', actualDeliveryQuantity,
+                    'referenceSdDocument', referenceSdDocument,
+                    'referenceSdDocumentItem', referenceSdDocumentItem,
                     'plant', plant
                 ) AS metadata_json
             FROM outbound_delivery_items
             """
         )
 
-        # Plant
         self.conn.execute(
             """
             INSERT INTO graph_nodes (node_id, node_type, label, metadata_json)
             SELECT DISTINCT
                 'plant_' || plant AS node_id,
                 'Plant' AS node_type,
-                COALESCE(plantname, plant) AS label,
+                COALESCE(plantName, plant) AS label,
                 json_object(
                     'plant', plant,
-                    'name', plantname,
-                    'country', country,
-                    'region', region,
-                    'address_id', addressid
+                    'name', plantName,
+                    'address_id', addressId,
+                    'plantCategory', plantCategory,
+                    'factoryCalendar', factoryCalendar,
+                    'salesOrganization', salesOrganization,
+                    'distributionChannel', distributionChannel,
+                    'division', division
                 ) AS metadata_json
             FROM plants
             """
         )
 
-        # Billing Document
         self.conn.execute(
             """
             INSERT INTO graph_nodes (node_id, node_type, label, metadata_json)
@@ -213,7 +196,6 @@ class GraphService:
             """
         )
 
-        # Billing Item
         self.conn.execute(
             """
             INSERT INTO graph_nodes (node_id, node_type, label, metadata_json)
@@ -233,7 +215,6 @@ class GraphService:
             """
         )
 
-        # Journal Entry
         self.conn.execute(
             """
             INSERT INTO graph_nodes (node_id, node_type, label, metadata_json)
@@ -253,7 +234,6 @@ class GraphService:
             """
         )
 
-        # Payment (optional enrichment)
         self.conn.execute(
             """
             INSERT INTO graph_nodes (node_id, node_type, label, metadata_json)
@@ -280,7 +260,6 @@ class GraphService:
         """Build graph edges from relational relationships and return edge count."""
         self.conn.execute("DELETE FROM graph_edges")
 
-        # Customer -> Sales Order
         self.conn.execute(
             """
             INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, metadata_json)
@@ -295,7 +274,6 @@ class GraphService:
             """
         )
 
-        # Sales Order -> Sales Order Item
         self.conn.execute(
             """
             INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, metadata_json)
@@ -309,7 +287,6 @@ class GraphService:
             """
         )
 
-        # Sales Order Item -> Product
         self.conn.execute(
             """
             INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, metadata_json)
@@ -324,7 +301,6 @@ class GraphService:
             """
         )
 
-        # Sales Order Item -> Delivery Item
         self.conn.execute(
             """
             INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, metadata_json)
@@ -346,7 +322,6 @@ class GraphService:
             """
         )
 
-        # Delivery Item -> Delivery
         self.conn.execute(
             """
             INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, metadata_json)
@@ -360,7 +335,6 @@ class GraphService:
             """
         )
 
-        # Delivery Item -> Plant
         self.conn.execute(
             """
             INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, metadata_json)
@@ -375,7 +349,6 @@ class GraphService:
             """
         )
 
-        # Delivery Item -> Billing Item
         self.conn.execute(
             """
             INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, metadata_json)
@@ -397,7 +370,6 @@ class GraphService:
             """
         )
 
-        # Billing Item -> Billing Document
         self.conn.execute(
             """
             INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, metadata_json)
@@ -411,7 +383,6 @@ class GraphService:
             """
         )
 
-        # Billing Document -> Journal Entry
         self.conn.execute(
             """
             INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, metadata_json)
@@ -431,24 +402,21 @@ class GraphService:
             """
         )
 
-        # Customer -> Address
         self.conn.execute(
             """
             INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, metadata_json)
             SELECT DISTINCT
-                'customer_has_address_' || bpa.businesspartner || '_' || bpa.addressid AS edge_id,
-                'customer_' || bpa.businesspartner AS source_id,
-                'address_' || bpa.businesspartner || '_' || bpa.addressid AS target_id,
+                'customer_has_address_' || bpa.businessPartner || '_' || bpa.addressId AS edge_id,
+                'customer_' || bpa.businessPartner AS source_id,
+                'address_' || bpa.businessPartner || '_' || bpa.addressId AS target_id,
                 'CUSTOMER_HAS_ADDRESS' AS edge_type,
-                json_object('address_id', bpa.addressid) AS metadata_json
+                json_object('address_id', bpa.addressId) AS metadata_json
             FROM business_partner_addresses bpa
             JOIN business_partners bp
-              ON bpa.businesspartner = bp.businesspartner
-            WHERE bp.businesspartnertype = 'Customer'
+              ON bpa.businessPartner = bp.businessPartner
             """
         )
 
-        # Billing Document -> Customer
         self.conn.execute(
             """
             INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, metadata_json)
@@ -463,7 +431,6 @@ class GraphService:
             """
         )
 
-        # Payment -> Journal Entry (optional enrichment)
         self.conn.execute(
             """
             INSERT INTO graph_edges (edge_id, source_id, target_id, edge_type, metadata_json)
@@ -577,72 +544,84 @@ class GraphService:
 
     def get_node_counts(self) -> Dict[str, int]:
         """Get count of nodes by type."""
-        rows = self.conn.execute(
-            """
-            SELECT node_type, COUNT(*) AS count
-            FROM graph_nodes
-            GROUP BY node_type
-            ORDER BY count DESC
-            """
-        ).fetchall()
-        return {row[0]: int(row[1]) for row in rows}
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT node_type, COUNT(*) AS count
+                FROM graph_nodes
+                GROUP BY node_type
+                ORDER BY count DESC
+                """
+            ).fetchall()
+            return {row[0]: int(row[1]) for row in rows}
+        except Exception:
+            return {}
 
     def get_edge_counts(self) -> Dict[str, int]:
         """Get count of edges by type."""
-        rows = self.conn.execute(
-            """
-            SELECT edge_type, COUNT(*) AS count
-            FROM graph_edges
-            GROUP BY edge_type
-            ORDER BY count DESC
-            """
-        ).fetchall()
-        return {row[0]: int(row[1]) for row in rows}
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT edge_type, COUNT(*) AS count
+                FROM graph_edges
+                GROUP BY edge_type
+                ORDER BY count DESC
+                """
+            ).fetchall()
+            return {row[0]: int(row[1]) for row in rows}
+        except Exception:
+            return {}
 
     def get_sample_nodes(self, limit: int = 5) -> List[Dict[str, Any]]:
         """Get sample nodes."""
-        rows = self.conn.execute(
-            """
-            SELECT node_id, node_type, label, metadata_json
-            FROM graph_nodes
-            ORDER BY node_type, node_id
-            LIMIT ?
-            """,
-            [limit],
-        ).fetchall()
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT node_id, node_type, label, metadata_json
+                FROM graph_nodes
+                ORDER BY node_type, node_id
+                LIMIT ?
+                """,
+                [limit],
+            ).fetchall()
 
-        return [
-            {
-                "node_id": row[0],
-                "node_type": row[1],
-                "label": row[2],
-                "metadata": self._parse_json(row[3]),
-            }
-            for row in rows
-        ]
+            return [
+                {
+                    "node_id": row[0],
+                    "node_type": row[1],
+                    "label": row[2],
+                    "metadata": self._parse_json(row[3]),
+                }
+                for row in rows
+            ]
+        except Exception:
+            return []
 
     def get_sample_edges(self, limit: int = 5) -> List[Dict[str, Any]]:
         """Get sample edges."""
-        rows = self.conn.execute(
-            """
-            SELECT edge_id, source_id, target_id, edge_type, metadata_json
-            FROM graph_edges
-            ORDER BY edge_type, edge_id
-            LIMIT ?
-            """,
-            [limit],
-        ).fetchall()
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT edge_id, source_id, target_id, edge_type, metadata_json
+                FROM graph_edges
+                ORDER BY edge_type, edge_id
+                LIMIT ?
+                """,
+                [limit],
+            ).fetchall()
 
-        return [
-            {
-                "edge_id": row[0],
-                "source_id": row[1],
-                "target_id": row[2],
-                "edge_type": row[3],
-                "metadata": self._parse_json(row[4]),
-            }
-            for row in rows
-        ]
+            return [
+                {
+                    "edge_id": row[0],
+                    "source_id": row[1],
+                    "target_id": row[2],
+                    "edge_type": row[3],
+                    "metadata": self._parse_json(row[4]),
+                }
+                for row in rows
+            ]
+        except Exception:
+            return []
 
     def get_node_with_neighbors(self, node_id: str) -> Optional[Dict[str, Any]]:
         """Get a node with its direct neighbors."""

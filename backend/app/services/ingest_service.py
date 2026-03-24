@@ -12,9 +12,9 @@ import duckdb
 class IngestService:
     """Service for ingesting partitioned JSONL SAP O2C data into DuckDB."""
 
-    def __init__(self, conn: duckdb.DuckDBPyConnection):
+    def __init__(self, conn):
         self.conn = conn
-        self.stats: Dict[str, Dict[str, int]] = {}
+        self.stats = {}
 
     @staticmethod
     def find_repo_root(start: Path) -> Path:

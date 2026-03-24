@@ -55,12 +55,10 @@ class NodeResponse(BaseModel):
     node: NodeDetail
     incoming_edges: List[EdgeDetail]
     outgoing_edges: List[EdgeDetail]
-    neighbor_nodes: List[NodeDetail]
+    neighbors: List[NodeDetail]
 
 
 class SubgraphResponse(BaseModel):
     """Subgraph response for neighborhood."""
     nodes: List[NodeDetail]
     edges: List[EdgeDetail]
-    center_node_id: str
-    depth: int

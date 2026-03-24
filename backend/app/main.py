@@ -4,11 +4,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .routers.health import router as health_router
 from .routers.ingest import router as ingest_router
-from .routers.graph import router as graph_router
-from .db.init_db import init_database
 
-# Initialize database on startup
-init_database()
+from .routers.graph import router as graph_router
+from .routers.query import router as query_router
 
 app = FastAPI(
     title="O2C Graph Explorer API",
@@ -26,9 +24,13 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(health_router, prefix="/api", tags=["health"])
-app.include_router(ingest_router, prefix="/api", tags=["ingestion"])
-app.include_router(graph_router, prefix="/api", tags=["graph"])
+
+# Only apply /api prefix here, not in each router
+
+app.include_router(health_router, prefix="/api")
+app.include_router(ingest_router, prefix="/api")
+app.include_router(graph_router, prefix="/api")
+app.include_router(query_router)
 
 
 @app.get("/")

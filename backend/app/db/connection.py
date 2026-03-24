@@ -1,26 +1,16 @@
-"""Database connection management for DuckDB."""
+from pathlib import Path
 
 import duckdb
-from pathlib import Path
-from ..config import settings
 
 
-_connection = None
+def get_db_path() -> Path:
+    """Return the shared DuckDB file path for the whole app."""
+    repo_root = Path(__file__).resolve().parents[3]
+    db_dir = repo_root / "data" / "processed"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    return db_dir / "o2c_graph.db"
 
 
-def get_db_connection():
-    """Get or create DuckDB connection."""
-    global _connection
-    if _connection is None:
-        db_path = Path(settings.DATABASE_PATH)
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        _connection = duckdb.connect(str(db_path))
-    return _connection
-
-
-def close_db_connection():
-    """Close the database connection."""
-    global _connection
-    if _connection is not None:
-        _connection.close()
-        _connection = None
+def get_db_connection() -> duckdb.DuckDBPyConnection:
+    """Return a connection to the shared DuckDB database file."""
+    return duckdb.connect(str(get_db_path()))

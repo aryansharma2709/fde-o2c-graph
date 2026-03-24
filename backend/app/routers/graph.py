@@ -1,79 +1,104 @@
-"""Graph exploration router."""
+from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException
-from typing import Optional
-from ..schemas import (
-    SchemaResponse, GraphOverviewResponse,
-    NodeResponse, SubgraphResponse
-)
+from fastapi import APIRouter, HTTPException, Query
+
 from ..services.graph_service import GraphService
-from ..db.duckdb import db
 
 router = APIRouter()
-graph_service = GraphService()
+
+router = APIRouter()
 
 
-@router.get("/schema", response_model=SchemaResponse)
-async def get_schema():
-    """Get database schema information."""
+@router.get("/schema")
+def get_schema() -> Dict[str, Any]:
+    """Return relational table names and graph table counts."""
     try:
-        relational_tables = [table for table in db.get_table_names() if not table.startswith('graph_')]
-        graph_nodes_count = db.get_table_count('graph_nodes')
-        graph_edges_count = db.get_table_count('graph_edges')
+        service = GraphService()
 
-        return SchemaResponse(
-            relational_tables=relational_tables,
-            graph_nodes_count=graph_nodes_count,
-            graph_edges_count=graph_edges_count
-        )
+        relational_tables = [
+            "sales_order_headers",
+            "sales_order_items",
+            "outbound_delivery_headers",
+            "outbound_delivery_items",
+            "billing_document_headers",
+            "billing_document_items",
+            "business_partners",
+            "products",
+            "plants",
+            "journal_entry_items_accounts_receivable",
+            "payments_accounts_receivable",
+            "business_partner_addresses",
+        ]
+
+        table_counts = {}
+        for table in relational_tables:
+            try:
+                row = service.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                table_counts[table] = int(row[0]) if row else 0
+            except Exception:
+                table_counts[table] = 0
+
+        graph_nodes = 0
+        graph_edges = 0
+
+        try:
+            row = service.conn.execute("SELECT COUNT(*) FROM graph_nodes").fetchone()
+            graph_nodes = int(row[0]) if row else 0
+        except Exception:
+            pass
+
+        try:
+            row = service.conn.execute("SELECT COUNT(*) FROM graph_edges").fetchone()
+            graph_edges = int(row[0]) if row else 0
+        except Exception:
+            pass
+
+        return {
+            "relational_tables": table_counts,
+            "graph_nodes": graph_nodes,
+            "graph_edges": graph_edges,
+        }
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get schema: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get schema: {e}")
 
 
-@router.get("/graph/overview", response_model=GraphOverviewResponse)
-async def get_graph_overview():
+@router.get("/graph/overview")
+def get_graph_overview() -> Dict[str, Any]:
     """Get graph overview with counts and samples."""
     try:
-        node_counts = graph_service.get_node_counts()
-        edge_counts = graph_service.get_edge_counts()
-        sample_nodes = graph_service.get_sample_nodes()
-        sample_edges = graph_service.get_sample_edges()
-
-        return GraphOverviewResponse(
-            node_counts=node_counts,
-            edge_counts=edge_counts,
-            sample_nodes=sample_nodes,
-            sample_edges=sample_edges
-        )
+        service = GraphService()
+        return service.get_graph_overview()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get graph overview: {str(e)}")
+        message = str(e)
+        if "graph_nodes" in message or "graph_edges" in message:
+            raise HTTPException(
+                status_code=409,
+                detail="Graph not built yet. Run /api/ingest first.",
+            )
+        raise HTTPException(status_code=500, detail=f"Failed to get graph overview: {e}")
 
 
-@router.get("/node/{node_id}", response_model=NodeResponse)
-async def get_node(node_id: str):
-    """Get a specific node with its neighbors."""
+@router.get("/node/{node_id}")
+def get_node(node_id: str) -> Dict[str, Any]:
+    """Get one node, its immediate edges, and neighboring nodes."""
     try:
-        result = graph_service.get_node_with_neighbors(node_id)
+        service = GraphService()
+        result = service.get_node_with_neighbors(node_id)
         if not result:
-            raise HTTPException(status_code=404, detail=f"Node {node_id} not found")
-
-        return NodeResponse(**result)
+            raise HTTPException(status_code=404, detail="Node not found")
+        return result
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get node: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get node details: {e}")
 
 
-@router.get("/graph/subgraph", response_model=SubgraphResponse)
-async def get_subgraph(node_id: str, depth: int = 1):
-    """Get a subgraph around a node."""
+@router.get("/graph/subgraph")
+def get_subgraph(node_id: str = Query(...), depth: int = Query(1, ge=1, le=2)) -> Dict[str, Any]:
+    """Get a neighborhood subgraph around a node."""
     try:
-        if depth < 1 or depth > 2:
-            raise HTTPException(status_code=400, detail="Depth must be 1 or 2")
-
-        result = graph_service.get_subgraph(node_id, depth)
-        return SubgraphResponse(**result)
-    except HTTPException:
-        raise
+        service = GraphService()
+        return service.get_subgraph(node_id, max_depth=depth)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get subgraph: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get subgraph: {e}")
