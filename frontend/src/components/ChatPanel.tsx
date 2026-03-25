@@ -1,91 +1,271 @@
 import React, { useState } from 'react';
 import { api } from '../services/api';
-import { ChatResponse } from '../types';
-import { Background } from 'reactflow';
 
-interface ChatPanelProps {
-  onReferencedNodes: (nodeIds: string[]) => void;
-}
+type ChatResponse = {
+  answer_text: string;
+  intent: string;
+  cited_data_summary?: any;
+  referenced_node_ids?: string[];
+  referenced_edge_ids?: string[];
+  requires_clarification?: boolean;
+};
+
+type ChatPanelProps = {
+  onReferencedNodes?: (nodeIds: string[], edgeIds?: string[]) => void;
+};
+
+const EXAMPLE_PROMPTS = [
+  'Which products are associated with the highest number of billing documents?',
+  'Trace billing document 90504248',
+  'Show broken flows',
+];
 
 const ChatPanel: React.FC<ChatPanelProps> = ({ onReferencedNodes }) => {
   const [prompt, setPrompt] = useState('');
-  const [response, setResponse] = useState<ChatResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [chatResult, setChatResult] = useState<ChatResponse | null>(null);
+
+  const sendPrompt = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    setLoading(true);
+    setError('');
+    setChatResult(null);
+
+    try {
+      const result = await api.sendChatPrompt(trimmed);
+      setChatResult(result);
+
+      if (onReferencedNodes) {
+        onReferencedNodes(
+          result.referenced_node_ids || [],
+          result.referenced_edge_ids || []
+        );
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Failed to get response');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!prompt.trim()) return;
-
-    setLoading(true);
-    try {
-      const res = await api.chat(prompt);
-      setResponse(res);
-      if (res.referenced_node_ids) {
-        onReferencedNodes(res.referenced_node_ids);
-      }
-    } catch (error) {
-      console.error('Chat error:', error);
-      setResponse({ answer_text: `Error: ${error.message}`, cited_data_summary: '' });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const examplePrompts = [
-    'Which products are associated with the highest number of billing documents?';,
-    'Trace billing document 90504248',
-    'Show broken flows',
-  ];
-
-  const handleExampleClick = async (prompt: string) => {
-    setLoading(true);
-    try {
-      const res = await api.chat(prompt);
-      setResponse(res);
-      if (res.referenced_node_ids) {
-        onReferencedNodes(res.referenced_node_ids);
-      }
-    } catch (error) {
-      setResponse({ answer_text: `Error: ${error.message}`, cited_data_summary: '' });
-    } finally {
-      setLoading(false);
-    }
+    await sendPrompt(prompt);
   };
 
   return (
-    <div style={{ padding: '20px', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <h3>Chat</h3>
-      <div style={{ marginBottom: '10px' }}>
-        {examplePrompts.map((p, i) => (
-          <button key={i} type="button" onClick={() => handleExampleClick(p)} style={{ margin: '5px', padding: '5px' }}>
-            {p}
+    <div
+      style={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        padding: 16,
+        gap: 14,
+        background: '#ffffff',
+        color: '#0f172a',
+      }}
+    >
+      <h2
+        style={{
+          margin: 0,
+          fontSize: 28,
+          fontWeight: 800,
+          color: '#0b1b46',
+        }}
+      >
+        Chat
+      </h2>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {EXAMPLE_PROMPTS.map((example) => (
+          <button
+            key={example}
+            type="button"
+            onClick={() => sendPrompt(example)}
+            style={{
+              padding: '14px 16px',
+              borderRadius: 14,
+              border: '1px solid #cbd5e1',
+              background: '#ffffff',
+              color: '#0f172a',
+              cursor: 'pointer',
+              textAlign: 'left',
+              fontWeight: 500,
+              lineHeight: 1.35,
+            }}
+          >
+            {example}
           </button>
         ))}
       </div>
-      <form onSubmit={handleSubmit} style={{ marginBottom: '20px' }}>
+
+      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <input
-          type="text"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           placeholder="Ask about the O2C data..."
-          style={{ width: '100%', padding: '10px' }}
+          style={{
+            padding: '14px 16px',
+            borderRadius: 14,
+            border: '1px solid #cbd5e1',
+            fontSize: 16,
+            background: '#ffffff',
+            color: '#0f172a',
+            outline: 'none',
+          }}
         />
-        <button type="submit" disabled={loading} style={{ marginTop: '10px', padding: '10px'}}>
+
+        <button
+          type="submit"
+          disabled={loading}
+          style={{
+            width: 120,
+            padding: '12px 14px',
+            borderRadius: 12,
+            border: 'none',
+            background: '#0f172a',
+            color: '#ffffff',
+            cursor: 'pointer',
+            fontWeight: 700,
+            opacity: loading ? 0.8 : 1,
+          }}
+        >
           {loading ? 'Sending...' : 'Send'}
         </button>
       </form>
-      {response && (
-        <div>
-          <h4>Response:</h4>
-          <p>{response.answer_text}</p>
-          {response.cited_data_summary && (
-            <p><strong>Data Summary:</strong> {response.cited_data_summary}</p>
-          )}
-          {response.referenced_node_ids && (
-            <p><strong>Referenced Nodes:</strong> {response.referenced_node_ids.join(', ')}</p>
-          )}
-        </div>
-      )}
+
+      <div
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          borderTop: '1px solid #e2e8f0',
+          paddingTop: 12,
+        }}
+      >
+        <h3
+          style={{
+            marginTop: 0,
+            marginBottom: 12,
+            fontSize: 20,
+            fontWeight: 800,
+            color: '#0b1b46',
+          }}
+        >
+          Response
+        </h3>
+
+        {error && (
+          <div
+            style={{
+              color: '#b91c1c',
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: 12,
+              padding: '12px 14px',
+              whiteSpace: 'pre-wrap',
+              marginBottom: 12,
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        {chatResult && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div
+              style={{
+                whiteSpace: 'pre-wrap',
+                lineHeight: 1.6,
+                fontSize: 15,
+                color: '#0f172a',
+              }}
+            >
+              {chatResult.answer_text}
+            </div>
+
+            {chatResult.cited_data_summary && (
+              <details
+                style={{
+                  border: '1px solid #dbe4f0',
+                  borderRadius: 12,
+                  background: '#ffffff',
+                  overflow: 'hidden',
+                }}
+              >
+                <summary
+                  style={{
+                    cursor: 'pointer',
+                    padding: '12px 14px',
+                    fontWeight: 700,
+                    background: '#f8fafc',
+                    color: '#0f172a',
+                  }}
+                >
+                  Data summary
+                </summary>
+                <pre
+                  style={{
+                    margin: 0,
+                    padding: '12px 14px',
+                    maxHeight: 220,
+                    overflow: 'auto',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    background: '#f8fafc',
+                    color: '#0f172a',
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {JSON.stringify(chatResult.cited_data_summary, null, 2)}
+                </pre>
+              </details>
+            )}
+
+            {chatResult.referenced_node_ids && chatResult.referenced_node_ids.length > 0 && (
+              <details
+                style={{
+                  border: '1px solid #dbe4f0',
+                  borderRadius: 12,
+                  background: '#ffffff',
+                  overflow: 'hidden',
+                }}
+              >
+                <summary
+                  style={{
+                    cursor: 'pointer',
+                    padding: '12px 14px',
+                    fontWeight: 700,
+                    background: '#f8fafc',
+                    color: '#0f172a',
+                  }}
+                >
+                  Referenced nodes
+                </summary>
+                <pre
+                  style={{
+                    margin: 0,
+                    padding: '12px 14px',
+                    maxHeight: 220,
+                    overflow: 'auto',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    background: '#f8fafc',
+                    color: '#0f172a',
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {JSON.stringify(chatResult.referenced_node_ids, null, 2)}
+                </pre>
+              </details>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
