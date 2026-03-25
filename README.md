@@ -67,27 +67,28 @@ python -m venv .venv
 pip install -r requirements.txt
 python -m uvicorn backend.app.main:app --reload
  ```
-3. Frontend setup
+## 3. Frontend setup
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-5. Frontend environment
-
+## 4. Frontend environment
+``` bash
 Create:
 
 frontend/.env
-
+``` 
 with:
-
+``` 
 VITE_API_BASE_URL=http://127.0.0.1:8000
+``` 
 Deployment
 
 This project is deployed using Render:
 
-backend: Render Web Service
-frontend: Render Static Site
+backend: Render Web Service - https://fde-o2c-graph.onrender.com
+frontend: Render Static Site - https://fde-o2c-graph-1.onrender.com
 
 See docs/deployment.md for the full deployment steps.
 
@@ -103,7 +104,7 @@ show broken flows
 ask an unrelated prompt and show guardrail rejection
 
 See docs/demo-script.md for a presentation flow.
-
+```bash
 Repository Structure
 backend/         FastAPI backend
 frontend/        React + TypeScript frontend
@@ -112,7 +113,7 @@ scripts/         helper scripts
 sessions/        AI workflow summary / transcripts
 data/            raw dataset (local development)
 AI-Assisted Development Note
-
+```
 AI tools were actively used during implementation for:
 
 scaffolding
@@ -150,13 +151,6 @@ graph structures are derived for exploration
 required business questions are answered deterministically
 the chat layer improves usability without sacrificing grounding
 
-After pasting that into `README.md`, do this:
-
-```bash
-git add README.md
-git commit -m "Update README for final submission"
-git push origin main
-```
 ---
 <img width="1887" height="867" alt="image" src="https://github.com/user-attachments/assets/bc602f17-f2eb-43ae-acf2-5d08931cdbfa" />
 <img width="695" height="636" alt="image" src="https://github.com/user-attachments/assets/8baf4853-f0d2-4d1a-bb86-7c30cce0ae65" />
