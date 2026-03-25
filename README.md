@@ -83,7 +83,7 @@ with:
 ``` 
 VITE_API_BASE_URL=http://127.0.0.1:8000
 ``` 
-Deployment
+## Deployment
 
 This project is deployed using Render:
 
@@ -112,8 +112,9 @@ docs/            architecture, deployment, demo notes
 scripts/         helper scripts
 sessions/        AI workflow summary / transcripts
 data/            raw dataset (local development)
-AI-Assisted Development Note
 ```
+## AI-Assisted Development Note
+
 AI tools were actively used during implementation for:
 
 scaffolding
@@ -136,7 +137,7 @@ no unrestricted NL-to-SQL generation is used
 graph exploration is optimized for demo clarity rather than large-scale graph analytics
 Submission Contents
 
-This submission includes:
+## This submission includes:
 
 a public GitHub repository
 a working live demo
