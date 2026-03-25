@@ -10,7 +10,7 @@ interface GraphViewProps {
 }
 
 const GraphView: React.FC<GraphViewProps> = ({ nodes, edges, onNodeClick }) => {
-  const onNodeClickHandler = useCallback((event: any, node: any) => {
+  const onNodeClickHandler = useCallback((_event: any, node: any) => {
     onNodeClick(node.id);
   }, [onNodeClick]);
 
